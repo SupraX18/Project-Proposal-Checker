@@ -74,6 +74,15 @@ app.use(express.json({ limit: '2mb' }));
 
 // Health check — must be BEFORE DB init middleware so it always responds
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/debug-env', (_req, res) => {
+  const dbUrl = process.env.DATABASE_URL || '';
+  res.json({
+    hasDbUrl: !!dbUrl,
+    dbUrlPreview: dbUrl ? dbUrl.replace(/:([^:@]+)@/, ':***@').slice(0, 60) + '...' : 'NOT SET',
+    hasJwtSecret: !!process.env.JWT_SECRET,
+    nodeEnv: process.env.NODE_ENV || 'not set',
+  });
+});
 app.get('/api', (_req, res) => {
   res.json({ service: 'proposal-checker-api', ok: true, health: '/api/health' });
 });
