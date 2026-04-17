@@ -1,0 +1,13 @@
+{
+  "name": "project-proposal-checker",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev:frontend",
+    "build": "npm run build:frontend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:server": "npm run dev:backend",
+    "start:backend": "npm run start --prefix backend"
+  }
+}
