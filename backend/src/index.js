@@ -72,7 +72,13 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '2mb' }));
 
-// Lazy DB initialization middleware — runs before every request
+// Health check — must be BEFORE DB init middleware so it always responds
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api', (_req, res) => {
+  res.json({ service: 'proposal-checker-api', ok: true, health: '/api/health' });
+});
+
+// Lazy DB initialization middleware — runs before every request that needs DB
 let _initialized = false;
 let _initError = null;
 async function initializeApp() {
@@ -105,16 +111,6 @@ app.get('/', (_req, res) => {
     health: '/api/health',
   });
 });
-
-app.get('/api', (_req, res) => {
-  res.json({
-    service: 'proposal-checker-api',
-    ok: true,
-    health: '/api/health',
-  });
-});
-
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 function asyncRoute(handler) {
   return (req, res, next) => {
