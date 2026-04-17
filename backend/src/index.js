@@ -75,7 +75,7 @@ app.use(express.json({ limit: '2mb' }));
 // Health check — must be BEFORE DB init middleware so it always responds
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/debug-env', (_req, res) => {
-  const dbUrl = process.env.DATABASE_URL || '';
+  const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || process.env.POSTGRES_URL || '';
   res.json({
     hasDbUrl: !!dbUrl,
     dbUrlPreview: dbUrl ? dbUrl.replace(/:([^:@]+)@/, ':***@').slice(0, 60) + '...' : 'NOT SET',
