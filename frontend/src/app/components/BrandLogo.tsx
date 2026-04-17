@@ -1,5 +1,5 @@
 import React from 'react';
-import { cn } from './UI';
+import { cn } from './ui';
 
 export function ProjectLogoMark({
   className,
