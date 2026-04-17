@@ -12,10 +12,10 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api"
+      "destination": "/api/index.mjs"
     },
     {
-      "source": "/:path((?!api(?:/|$)).*)",
+      "source": "/:path*",
       "destination": "/index.html"
     }
   ]

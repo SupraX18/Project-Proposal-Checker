@@ -29,13 +29,11 @@ const hasFrontendBuild = existsSync(frontendEntryFile);
 
 if (!process.env.DATABASE_URL) {
   // eslint-disable-next-line no-console
-  console.error('Missing DATABASE_URL. Create backend/config/.env.');
-  process.exit(1);
+  console.error('Missing DATABASE_URL. Set it as an environment variable.');
 }
 if (!process.env.JWT_SECRET) {
   // eslint-disable-next-line no-console
-  console.error('Missing JWT_SECRET. Create backend/config/.env.');
-  process.exit(1);
+  console.error('Missing JWT_SECRET. Set it as an environment variable.');
 }
 
 function buildAllowedOrigins() {
@@ -73,6 +71,28 @@ app.use(cors({
   credentials: false,
 }));
 app.use(express.json({ limit: '2mb' }));
+
+// Lazy DB initialization middleware — runs before every request
+let _initialized = false;
+let _initError = null;
+async function initializeApp() {
+  if (_initialized) return;
+  if (_initError) throw _initError;
+  try {
+    await ensureDb();
+    await ensureDocumentColumns();
+    await ensureWorkspaceSettingsTable();
+    _initialized = true;
+  } catch (e) {
+    _initError = e;
+    throw e;
+  }
+}
+app.use((req, res, next) => {
+  initializeApp().then(() => next()).catch((e) => {
+    res.status(503).json({ error: 'Service unavailable: ' + (e?.message || 'DB init failed') });
+  });
+});
 
 app.get('/', (_req, res) => {
   if (hasFrontendBuild) {
@@ -302,7 +322,7 @@ async function ensureDb() {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('Database connection failed. Check Postgres + DATABASE_URL. Error:', e?.message || e);
-    process.exit(1);
+    throw e;
   }
 }
 
@@ -943,19 +963,18 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Server error' });
 });
 
-async function initializeApp() {
-  await ensureDb();
-  await ensureDocumentColumns();
-  await ensureWorkspaceSettingsTable();
-}
-
-await initializeApp();
 
 if (isDirectRun) {
   const port = Number(process.env.PORT || 43121);
-  app.listen(port, () => {
+  initializeApp().then(() => {
+    app.listen(port, () => {
+      // eslint-disable-next-line no-console
+      console.log(`API listening on port ${port}`);
+    });
+  }).catch((e) => {
     // eslint-disable-next-line no-console
-    console.log(`API listening on port ${port}`);
+    console.error('Failed to initialize app:', e);
+    process.exit(1);
   });
 }
 
