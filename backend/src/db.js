@@ -11,6 +11,7 @@ dotenv.config({ path: path.resolve(__dirname, '..', 'config', '.env') });
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || process.env.POSTGRES_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
 export async function query(text, params) {
