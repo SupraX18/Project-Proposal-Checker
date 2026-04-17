@@ -476,7 +476,8 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
       [name, email.toLowerCase(), passwordHash, role]
     );
     const user = result.rows[0];
-    const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, process.env.JWT_SECRET, {
+    const secret = process.env.JWT_SECRET || 'proposal_checker_default_secret_key_2024_xyz';
+    const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, secret, {
       expiresIn: '7d',
     });
     return res.json({ token, user });
@@ -508,7 +509,8 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
   const user = { id: row.id, name: row.name, email: row.email, role: row.role };
-  const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, process.env.JWT_SECRET, {
+  const secret = process.env.JWT_SECRET || 'proposal_checker_default_secret_key_2024_xyz';
+  const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, secret, {
     expiresIn: '7d',
   });
   return res.json({ token, user });
