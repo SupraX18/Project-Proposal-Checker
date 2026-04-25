@@ -2122,7 +2122,23 @@ html[data-theme="dark"] .theme-toggle {
   }
 
   .hero-panel {
-    display: none;
+    padding: 16px 16px 0;
+    align-items: center;
+    text-align: center;
+  }
+  
+  .hero-logo-wrap {
+    align-items: center;
+    gap: 12px;
+  }
+  
+  .hero-logo {
+    width: 110px;
+    height: 110px;
+  }
+  
+  .hero-panel h1 {
+    font-size: 2rem;
   }
 
   .auth-panel {
