@@ -2341,19 +2341,7 @@ html[data-theme="dark"] .theme-toggle {
     padding: 12px 14px;
     font-size: 16px !important; /* Prevents iOS auto-zoom */
     width: 100%;
-    -webkit-appearance: none; /* Removes default iOS styling from select */
-    appearance: none;
     background-color: rgba(255, 255, 255, 0.95);
-  }
-  
-  .auth-form select {
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 14px center;
-  }
-  
-  html[data-theme="dark"] .auth-form select {
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   }
 
   .primary-button,
