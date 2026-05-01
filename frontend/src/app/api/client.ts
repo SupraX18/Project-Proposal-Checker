@@ -50,21 +50,44 @@ export async function apiFetch<T>(
   return (await res.json()) as T;
 }
 
-export type AuthUser = { id: string; name: string; email: string; role: 'student' | 'admin' | 'coadmin' };
+export type AuthUser = { id: string; name: string; email: string; role: 'student' | 'admin' };
 export type UserDirectoryItem = {
   id: string;
   name: string;
   email: string;
-  role: 'student' | 'admin' | 'coadmin';
+  role: 'student' | 'admin';
   created_at?: string;
 };
 export type ProposalStatus = 'Pending' | 'In Review' | 'Approved' | 'Revision Requested' | 'Rejected';
 export type EvaluationRecommendation = 'Approve' | 'Revise' | 'Reject';
-export type ProposalDocument = {
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-  uploadedAt: string;
+export type Document = {
+  id: string;
+  proposal_id: string;
+  folder_id: string | null;
+  name: string;
+  path: string;
+  mime_type: string;
+  size: number;
+  uploaded_at: string;
+};
+
+export type Folder = {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  student_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ActivityLog = {
+  id: string;
+  user_id: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  details: any;
+  created_at: string;
 };
 export type EvaluationScores = {
   problemClarity: number;
@@ -129,7 +152,7 @@ export async function login(email: string, password: string) {
   });
 }
 
-export async function register(payload: { name: string; email: string; password: string; role?: 'student' | 'admin' | 'coadmin' }) {
+export async function register(payload: { name: string; email: string; password: string; role?: 'student' | 'admin' }) {
   return apiFetch<{ token: string; user: AuthUser }>(`/api/auth/register`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -145,7 +168,6 @@ export type ProposalListItem = {
   updated_at: string;
   student: string;
   reviewer: string | null;
-  document: ProposalDocument | null;
   evaluation: ProposalEvaluation | null;
 };
 
@@ -168,7 +190,6 @@ export type ProposalDetailsItem = {
   updated_at: string;
   student: string;
   reviewer: string | null;
-  document: ProposalDocument | null;
   evaluation: ProposalEvaluation | null;
 };
 
@@ -195,21 +216,29 @@ export async function deleteProposal(id: string) {
   });
 }
 
-export async function uploadProposalDocument(id: string, file: File) {
+export async function uploadDocument(proposal_id: string, file: File, folder_id?: string) {
   const body = new FormData();
   body.append('document', file);
-  return apiFetch<{ document: ProposalDocument }>(`/api/proposals/${id}/document`, {
+  body.append('proposal_id', proposal_id);
+  if (folder_id) body.append('folder_id', folder_id);
+  return apiFetch<{ document: Document }>(`/api/documents`, {
     method: 'POST',
     body,
   });
 }
 
-export async function downloadProposalDocument(id: string) {
+export async function deleteDocument(id: string) {
+  return apiFetch<{ ok: true }>(`/api/documents/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function downloadDocument(id: string) {
   const token = getToken();
   const headers = new Headers();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}/api/proposals/${id}/document`, {
+  const res = await fetch(`${API_BASE}/api/documents/${id}/download`, {
     method: 'GET',
     headers,
   });
@@ -229,7 +258,7 @@ export async function downloadProposalDocument(id: string) {
   const match = disposition.match(/filename="([^"]+)"/i);
   return {
     blob,
-    fileName: match?.[1] || 'proposal-document.pdf',
+    fileName: match?.[1] || 'document.pdf',
   };
 }
 
@@ -270,5 +299,28 @@ export async function updateWorkspaceSettings(payload: WorkspaceSettings) {
 
 export async function getSimilarityReport() {
   return apiFetch<{ item: SimilarityReport }>(`/api/proposals/similarity-report`);
+}
+
+export async function listFolders() {
+  return apiFetch<{ items: Folder[] }>(`/api/folders`);
+}
+
+export async function createFolder(name: string, parent_id?: string) {
+  return apiFetch<{ item: Folder }>(`/api/folders`, {
+    method: 'POST',
+    body: JSON.stringify({ name, parent_id }),
+  });
+}
+
+export async function deleteFolder(id: string) {
+  return apiFetch<{ ok: true }>(`/api/folders/${id}`, { method: 'DELETE' });
+}
+
+export async function listDocuments() {
+  return apiFetch<{ items: Document[] }>(`/api/documents`);
+}
+
+export async function listLogs() {
+  return apiFetch<{ items: ActivityLog[] }>(`/api/logs`);
 }
 

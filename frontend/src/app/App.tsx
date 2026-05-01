@@ -7,7 +7,10 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock3,
+  Download,
   FileText,
+  FileUp,
+  Folder as FolderIcon,
   LayoutDashboard,
   Menu,
   Moon,
@@ -18,6 +21,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Plus,
   X,
   XCircle,
 } from "lucide-react";
@@ -38,7 +42,7 @@ import {
   API_BASE,
   createProposal,
   deleteProposal,
-  downloadProposalDocument,
+  downloadDocument,
   getWorkspaceSettings,
   getSimilarityReport,
   listProposals,
@@ -46,11 +50,17 @@ import {
   login,
   register,
   saveProposalEvaluation,
-  uploadProposalDocument,
+  uploadDocument,
   updateWorkspaceSettings,
+  listFolders,
+  createFolder,
+  deleteFolder,
+  listDocuments,
+  deleteDocument,
   type AuthUser,
   type EvaluationRecommendation,
-  type ProposalDocument,
+  type Document,
+  type Folder,
   type ProposalEvaluation,
   type ProposalListItem,
   type ProposalStatus,
@@ -66,7 +76,7 @@ import {
 } from "./evaluationModel";
 import { ProjectLogoMark } from "./components/BrandLogo";
 
-type Role = "student" | "admin" | "coadmin";
+type Role = "student" | "admin";
 type View = "overview" | "submit" | "review" | "analytics" | "similarity" | "notifications" | "users" | "settings";
 type AuthMode = "login" | "register";
 type ThemeMode = "light" | "dark";
@@ -86,7 +96,7 @@ type ProposalRecord = {
   methodology: string;
   techStack: string[];
   team: { name: string; role: string }[];
-  document: ProposalDocument | null;
+  documents: Document[];
   evaluation: ProposalEvaluation | null;
 };
 
@@ -263,7 +273,7 @@ function normalizeProposal(item: ProposalListItem): ProposalRecord {
     methodology: "",
     techStack: [],
     team: [{ name: item.student, role: "Student" }],
-    document: item.document,
+    documents: [],
     evaluation: item.evaluation,
   };
 }
@@ -324,7 +334,8 @@ function App() {
     techStack: "",
     team: "",
   });
-  const [proposalDocumentDraft, setProposalDocumentDraft] = useState<ProposalUploadDraft | null>(null);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [evaluationDraft, setEvaluationDraft] = useState<EvaluationDraft>(
     createEmptyEvaluationDraft(),
   );
@@ -452,7 +463,7 @@ function App() {
   const selectedProposal =
     visibleProposals.find((proposal) => proposal.id === selectedProposalId) ?? null;
 
-  const selectedProposalDocument = selectedProposal?.document ?? null;
+  const selectedProposalDocuments = documents.filter(d => d.proposal_id === selectedProposal?.id);
   const submissionDeadlineState = useMemo(
     () => getDeadlineState(workspaceSettings.submissionDeadline, now),
     [now, workspaceSettings.submissionDeadline],
@@ -669,7 +680,7 @@ function App() {
     [adminMetrics.domains],
   );
 
-  const coadminStatusChartData = useMemo(() => {
+  const reviewerStatusChartData = useMemo(() => {
     const groups = ["Pending", "In Review", "Revision Requested", "Approved", "Rejected"] as ProposalStatus[];
     return groups.map((status, index) => ({
       name: status,
@@ -679,7 +690,7 @@ function App() {
     }));
   }, [myReviewQueue]);
 
-  const coadminDocumentChartData = useMemo(() => {
+  const reviewerDocumentChartData = useMemo(() => {
     const withPdf = myReviewQueue.filter((proposal) => proposal.document).length;
     const withoutPdf = Math.max(myReviewQueue.length - withPdf, 0);
     return [
@@ -796,9 +807,7 @@ function App() {
         techStack,
         team,
       });
-      if (proposalDocumentDraft) {
-        await uploadProposalDocument(result.id, proposalDocumentDraft.file);
-      }
+
       await refreshProposals();
       await refreshSimilarityReport();
       setProposalForm({
@@ -811,7 +820,7 @@ function App() {
         techStack: "",
         team: "",
       });
-      setProposalDocumentDraft(null);
+
       setView("overview");
       setToast({ kind: "success", text: "Proposal submitted successfully." });
     } catch (error) {
@@ -944,34 +953,27 @@ function App() {
     return <AppLoadingScreen />;
   }
 
-  function handleProposalDocumentChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-
-    const isPdf =
-      file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      setToast({ kind: "error", text: "Please upload a PDF file only." });
-      return;
+  async function refreshDocuments() {
+    try {
+      const res = await listDocuments();
+      setDocuments(res.items);
+    } catch {
+      // ignore
     }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setToast({ kind: "error", text: "Please keep the PDF under 10 MB." });
-      return;
-    }
-
-    setProposalDocumentDraft({
-      file,
-      fileName: file.name,
-      fileSize: file.size,
-      uploadedAt: new Date().toISOString(),
-    });
   }
 
-  async function handleDownloadProposalDocument(proposalId: string) {
+  async function refreshFolders() {
     try {
-      const { blob, fileName } = await downloadProposalDocument(proposalId);
+      const res = await listFolders();
+      setFolders(res.items);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleDownloadDocument(docId: string) {
+    try {
+      const { blob, fileName } = await downloadDocument(docId);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1047,7 +1049,7 @@ function App() {
               >
                 <option value="student">Student</option>
                 <option value="admin">Admin</option>
-                <option value="coadmin">Co-admin</option>
+
               </select>
             </label>
 
@@ -1261,14 +1263,87 @@ function App() {
         {view === "overview" && (
           <>
             {currentUser.role === "student" ? (
-              <section className="stats-grid">
-                <StatCard icon={<FileText size={18} />} label="Visible proposals" value={String(stats.total)} />
-                <StatCard icon={<CheckCircle2 size={18} />} label="Approved" value={String(stats.approved)} />
-                <StatCard icon={<AlertTriangle size={18} />} label="Needs revision" value={String(stats.revision)} />
-                <StatCard icon={<XCircle size={18} />} label="Rejected" value={String(stats.rejected)} />
-                <StatCard icon={<ClipboardCheck size={18} />} label="Average score" value={stats.averageScore} />
+              <>
+                <section className="stats-grid">
+                  <StatCard icon={<FileText size={18} />} label="Visible proposals" value={String(stats.total)} />
+                  <StatCard icon={<CheckCircle2 size={18} />} label="Approved" value={String(stats.approved)} />
+                  <StatCard icon={<AlertTriangle size={18} />} label="Needs revision" value={String(stats.revision)} />
+                  <StatCard icon={<XCircle size={18} />} label="Rejected" value={String(stats.rejected)} />
+                  <StatCard icon={<ClipboardCheck size={18} />} label="Average score" value={stats.averageScore} />
+                </section>
+              <section className="panel">
+                <div className="panel-title-row">
+                  <h3>Document Center</h3>
+                  <span>Manage files and folders related to your proposal</span>
+                </div>
+                <div className="folder-manager">
+                  {visibleProposals.length === 0 ? (
+                    <div className="empty-state sm">
+                      <span className="empty-state-text">Submit a proposal first to unlock the Document Center.</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="action-row">
+                        <button className="ghost-button" onClick={() => {
+                          const name = window.prompt("New folder name:");
+                          if (name) {
+                            createFolder(name).then(() => refreshFolders());
+                          }
+                        }}>
+                          <Plus size={16} /> New Folder
+                        </button>
+                        <label className="ghost-button upload-trigger" style={{ margin: 0 }}>
+                          <input
+                            type="file"
+                            className="visually-hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                await uploadDocument(visibleProposals[0].id, file);
+                                await refreshDocuments();
+                              }
+                            }}
+                          />
+                          <Upload size={16} /> Upload Document
+                        </label>
+                      </div>
+                      <div className="table-like-list" style={{ marginTop: '1rem' }}>
+                        {folders.map(f => (
+                          <div key={f.id} className="table-like-row">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <FolderIcon size={18} />
+                              <strong>{f.name}</strong>
+                            </div>
+                            <div className="table-like-meta">
+                              <button className="ghost-button icon-only" onClick={() => deleteFolder(f.id).then(refreshFolders)}>
+                                <XCircle size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {documents.map(d => (
+                          <div key={d.id} className="table-like-row">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <FileText size={18} />
+                              <strong>{d.name}</strong>
+                            </div>
+                            <div className="table-like-meta">
+                              <button className="ghost-button icon-only" onClick={() => handleDownloadDocument(d.id)}>
+                                <Download size={16} />
+                              </button>
+                              <button className="ghost-button icon-only" onClick={() => deleteDocument(d.id).then(refreshDocuments)}>
+                                <XCircle size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </section>
-            ) : currentUser.role === "admin" ? (
+              </>
+            ) : (
               <>
                 <section className="stats-grid">
                   <StatCard icon={<FileText size={18} />} label="Total proposals" value={String(adminMetrics.total)} />
@@ -1296,62 +1371,6 @@ function App() {
                     valueFormatter={(value, key) => (key === "averageScore" ? `${value.toFixed(1)}/10` : String(value))}
                     lineDomain={[0, 10]}
                     emptyMessage="Add proposals with domain names to unlock this chart."
-                  />
-                </section>
-              </>
-            ) : (
-              <>
-                <section className="stats-grid compact">
-                  <StatCard icon={<FileText size={18} />} label="Assigned to me" value={String(myReviewQueue.length)} />
-                  <StatCard icon={<CheckCircle2 size={18} />} label="Reviewed" value={String(proposals.filter((proposal) => proposal.evaluation?.evaluatorName === currentUser.name).length)} />
-                  <StatCard icon={<Clock3 size={18} />} label="Pending action" value={String(myReviewQueue.filter((proposal) => proposal.status === "Pending" || proposal.status === "In Review").length)} />
-                </section>
-                <section className="panel">
-                  <div className="panel-title-row">
-                    <h3>My assigned reviews</h3>
-                    <span>Co-admin dashboard view</span>
-                  </div>
-                  <div className="table-like-list">
-                    {myReviewQueue.map((proposal) => (
-                      <div key={proposal.id} className="table-like-row">
-                        <div>
-                          <strong>{proposal.title}</strong>
-                          <span>{proposal.student} - {proposal.domain}</span>
-                        </div>
-                        <div className="table-like-meta">
-                          <span className={`status-chip ${getStatusTone(proposal.status)}`}>{proposal.status}</span>
-                          <button className="ghost-button" onClick={() => { setView("review"); setSelectedProposalId(proposal.id); }}>
-                            Evaluate
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {!myReviewQueue.length && (
-                      <div className="empty-state">
-                        <Clock3 size={18} />
-                        <span>No assigned reviews yet.</span>
-                      </div>
-                    )}
-                  </div>
-                </section>
-                <section className="admin-grid">
-                  <FuturisticHistogramChart
-                    title="Queue by status"
-                    data={coadminStatusChartData}
-                    xKey="name"
-                    barKey="value"
-                    lineKey="signal"
-                    labelKey="name"
-                    barLabel="Queue count"
-                    lineLabel="Trend graph"
-                    valueFormatter={(value) => String(value)}
-                  />
-                  <FuturisticDonutChart
-                    title="Document coverage"
-                    data={coadminDocumentChartData}
-                    centerLabel="Assigned"
-                    centerValue={String(myReviewQueue.length)}
-                    valueFormatter={(value) => String(value)}
                   />
                 </section>
               </>

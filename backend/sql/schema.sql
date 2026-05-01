@@ -7,7 +7,7 @@ create table if not exists users (
   name text not null,
   email text not null unique,
   password_hash text not null,
-  role text not null check (role in ('student', 'admin', 'coadmin')),
+  role text not null check (role in ('student', 'admin')),
   created_at timestamptz not null default now()
 );
 
@@ -16,7 +16,7 @@ create table if not exists proposals (
   title text not null,
   domain text not null,
   status text not null check (status in ('Pending', 'In Review', 'Approved', 'Revision Requested', 'Rejected')),
-  student_id uuid not null references users(id) on delete cascade,
+  student_id uuid not null unique references users(id) on delete cascade,
   reviewer_id uuid references users(id) on delete set null,
   abstract text not null,
   problem text not null,
@@ -24,12 +24,6 @@ create table if not exists proposals (
   methodology text not null,
   tech_stack text[] not null default '{}',
   team jsonb not null default '[]'::jsonb,
-  document_name text,
-  document_path text,
-  document_data bytea,
-  document_mime_type text,
-  document_size integer,
-  document_uploaded_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -61,6 +55,44 @@ create table if not exists workspace_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists folders (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  parent_id uuid references folders(id) on delete cascade,
+  student_id uuid not null references users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists folders_student_id_idx on folders(student_id);
+
+create table if not exists documents (
+  id uuid primary key default uuid_generate_v4(),
+  proposal_id uuid not null references proposals(id) on delete cascade,
+  folder_id uuid references folders(id) on delete cascade,
+  name text not null,
+  path text not null,
+  data bytea,
+  mime_type text not null,
+  size integer not null,
+  uploaded_at timestamptz not null default now()
+);
+
+create index if not exists documents_proposal_id_idx on documents(proposal_id);
+create index if not exists documents_folder_id_idx on documents(folder_id);
+
+create table if not exists activity_logs (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references users(id) on delete cascade,
+  action text not null,
+  entity_type text not null,
+  entity_id text,
+  details jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists activity_logs_created_at_idx on activity_logs(created_at desc);
+
 insert into workspace_settings (id)
 values ('default')
 on conflict (id) do nothing;
@@ -88,6 +120,12 @@ execute function set_updated_at();
 drop trigger if exists workspace_settings_set_updated_at on workspace_settings;
 create trigger workspace_settings_set_updated_at
 before update on workspace_settings
+for each row
+execute function set_updated_at();
+
+drop trigger if exists folders_set_updated_at on folders;
+create trigger folders_set_updated_at
+before update on folders
 for each row
 execute function set_updated_at();
 
