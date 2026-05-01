@@ -1,41 +1,34 @@
-import React from 'react';
-import { cn } from './ui';
+import type { SVGProps } from 'react';
 
 export function ProjectLogoMark({
+  size = 24,
   className,
-}: {
-  className?: string;
-}) {
+  ...rest
+}: { size?: number } & SVGProps<SVGSVGElement>) {
   return (
     <svg
-      className={cn('h-5 w-5 text-current transition-transform duration-200 ease-out group-hover:scale-[1.02]', className)}
+      className={className}
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden="true"
+      {...rest}
     >
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" stroke="currentColor" strokeWidth="1.7" />
       <path
-        d="M8 3.75h5.8L18.25 8v7.75A3.25 3.25 0 0 1 15 19H8a3.25 3.25 0 0 1-3.25-3.25V7A3.25 3.25 0 0 1 8 3.75Z"
+        d="M8 7.5h6.2l2.3 2.3v5.9A2.3 2.3 0 0 1 14.2 18H8A2.5 2.5 0 0 1 5.5 15.5V10A2.5 2.5 0 0 1 8 7.5Z"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="1.7"
         strokeLinejoin="round"
       />
+      <path d="M14.2 7.5v2.3h2.3" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="M8.7 11h4.6M8.7 13.5h3.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <circle cx="15.8" cy="15.8" r="3.1" fill="currentColor" fillOpacity="0.16" />
       <path
-        d="M13.5 3.75V8h4.25"
+        d="m14.7 15.8.85.85 1.75-1.95"
         stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8.75 10h5.5M8.75 13h3.75"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-      <circle cx="15.9" cy="15.9" r="3.1" fill="currentColor" fillOpacity="0.18" />
-      <path
-        d="m14.7 15.9.85.85 1.75-1.95"
-        stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="1.7"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -44,32 +37,25 @@ export function ProjectLogoMark({
 }
 
 export function BrandLogo({
-  className,
-  markClassName,
-  textClassName,
+  className = '',
   showText = true,
+  compact = false,
 }: {
   className?: string;
-  markClassName?: string;
-  textClassName?: string;
   showText?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <div className={cn('flex items-center gap-3 select-none', className)}>
-      <div
-        className={cn(
-          'h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-600 via-blue-500 to-cyan-400 text-white shadow-lg shadow-indigo-200/60 grid place-items-center transition-transform duration-200 ease-out group-hover:scale-[1.02]',
-          markClassName
-        )}
-      >
-        <ProjectLogoMark />
+    <div className={`brand-logo ${compact ? 'compact' : ''} ${className}`.trim()}>
+      <div className="brand-logo-mark-shell">
+        <ProjectLogoMark size={compact ? 20 : 24} />
       </div>
-      {showText && (
-        <div className={cn('leading-tight', textClassName)}>
-          <div className="font-extrabold tracking-tight text-slate-900">Project Proposal Checker</div>
-          <div className="text-xs text-slate-500">Submission • Review • Evaluation</div>
+      {showText ? (
+        <div className="brand-logo-copy">
+          <strong>Project Proposal Checker</strong>
+          <span>Track proposals, documents, folders, and reviews</span>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

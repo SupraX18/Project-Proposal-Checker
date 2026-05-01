@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import { randomUUID } from 'crypto';
-import { promises as fs, createReadStream, existsSync } from 'fs';
+import { promises as fs, createReadStream, existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
@@ -16,16 +16,58 @@ const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDirectRun = process.argv[1] ? path.resolve(process.argv[1]) === __filename : false;
+
 dotenv.config({ path: path.resolve(__dirname, '..', 'config', '.env') });
+
 const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+const schemaFile = path.resolve(__dirname, '..', 'sql', 'schema.sql');
 const frontendDistDir = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
 const frontendEntryFile = path.join(frontendDistDir, 'index.html');
-const maxPdfSize = 10 * 1024 * 1024;
+const hasFrontendBuild = existsSync(frontendEntryFile);
+const maxUploadSize = 20 * 1024 * 1024;
 const documentStorageMode =
   String(process.env.DOCUMENT_STORAGE || 'database').trim().toLowerCase() === 'filesystem'
     ? 'filesystem'
     : 'database';
-const hasFrontendBuild = existsSync(frontendEntryFile);
+const statusAliasMap = new Map([
+  ['draft', 'Draft'],
+  ['pending', 'Submitted'],
+  ['submitted', 'Submitted'],
+  ['in review', 'Under Review'],
+  ['under review', 'Under Review'],
+  ['revision requested', 'Changes Requested'],
+  ['changes requested', 'Changes Requested'],
+  ['approved', 'Approved'],
+  ['rejected', 'Rejected'],
+]);
+const allowedUploadExtensions = new Set([
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.txt',
+  '.zip',
+]);
+const allowedUploadMimeTypes = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'image/png',
+  'image/jpeg',
+  'text/plain',
+  'application/zip',
+  'application/x-zip-compressed',
+]);
 
 if (!process.env.DATABASE_URL) {
   // eslint-disable-next-line no-console
@@ -37,11 +79,12 @@ if (!process.env.JWT_SECRET) {
 }
 
 function buildAllowedOrigins() {
-  const configured = String(process.env.CLIENT_ORIGIN || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return new Set(configured);
+  return new Set(
+    String(process.env.CLIENT_ORIGIN || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
 }
 
 const allowedOrigins = buildAllowedOrigins();
@@ -50,74 +93,14 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   if (!allowedOrigins.size) return true;
   if (allowedOrigins.has(origin)) return true;
+
   try {
     const url = new URL(origin);
-    const isLocalHost =
-      (url.hostname === 'localhost' || url.hostname === '127.0.0.1') &&
-      /^:\d+$/.test(url.port ? `:${url.port}` : ':');
-    return isLocalHost;
+    return ['localhost', '127.0.0.1'].includes(url.hostname);
   } catch {
     return false;
   }
 }
-
-app.use(cors({
-  origin(origin, callback) {
-    if (isAllowedOrigin(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error(`Origin not allowed by CORS: ${origin || 'unknown'}`));
-  },
-  credentials: false,
-}));
-app.use(express.json({ limit: '2mb' }));
-
-// Health check — must be BEFORE DB init middleware so it always responds
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-app.get('/api/debug-env', (_req, res) => {
-  const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_PRISMA_URL || process.env.POSTGRES_URL || '';
-  res.json({
-    hasDbUrl: !!dbUrl,
-    dbUrlPreview: dbUrl ? dbUrl.replace(/:([^:@]+)@/, ':***@').slice(0, 60) + '...' : 'NOT SET',
-    hasJwtSecret: !!process.env.JWT_SECRET,
-    nodeEnv: process.env.NODE_ENV || 'not set',
-  });
-});
-app.get('/api', (_req, res) => {
-  res.json({ service: 'proposal-checker-api', ok: true, health: '/api/health' });
-});
-
-// Lazy DB initialization middleware — runs before every request that needs DB
-let _initialized = false;
-let _initError = null;
-async function initializeApp() {
-  if (_initialized) return;
-  if (_initError) throw _initError;
-  try {
-    await ensureDb();
-    _initialized = true;
-  } catch (e) {
-    _initError = e;
-    throw e;
-  }
-}
-app.use((req, res, next) => {
-  initializeApp().then(() => next()).catch((e) => {
-    res.status(503).json({ error: 'Service unavailable: ' + (e?.message || 'DB init failed') });
-  });
-});
-
-app.get('/', (_req, res) => {
-  if (hasFrontendBuild) {
-    res.sendFile(frontendEntryFile);
-    return;
-  }
-  res.json({
-    service: 'proposal-checker-api',
-    ok: true,
-    health: '/api/health',
-  });
-});
 
 function asyncRoute(handler) {
   return (req, res, next) => {
@@ -125,115 +108,140 @@ function asyncRoute(handler) {
   };
 }
 
-async function logActivity(userId, action, entityType, entityId, details = {}) {
-  try {
-    await query(
-      `insert into activity_logs (user_id, action, entity_type, entity_id, details) values ($1, $2, $3, $4, $5)`,
-      [userId, action, entityType, entityId, JSON.stringify(details)]
-    );
-  } catch (err) {
-    console.error('Failed to log activity:', err);
-  }
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
-function mapDocument(row) {
-  if (!row || !row.document_name || !row.document_uploaded_at) return null;
-  return {
-    fileName: row.document_name,
-    fileSize: Number(row.document_size || 0),
-    mimeType: row.document_mime_type || 'application/pdf',
-    uploadedAt: row.document_uploaded_at,
-  };
+function normalizeProposalStatus(value) {
+  const normalized = statusAliasMap.get(String(value || '').trim().toLowerCase());
+  return normalized || null;
 }
 
 function sanitizeFileName(value) {
-  return String(value || 'proposal-document.pdf')
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'proposal-document.pdf';
-}
-
-const similarityStopWords = new Set([
-  'about', 'after', 'again', 'against', 'also', 'among', 'and', 'are', 'because', 'before',
-  'being', 'between', 'both', 'can', 'could', 'does', 'each', 'from', 'have', 'into',
-  'more', 'most', 'other', 'over', 'same', 'should', 'some', 'such', 'than', 'that',
-  'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'under',
-  'using', 'very', 'what', 'when', 'where', 'which', 'while', 'with', 'would', 'your',
-  'will', 'project', 'proposal', 'system', 'application', 'study', 'based',
-]);
-
-function normalizeSimilarityText(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+  const cleanName = String(value || 'document')
+    .trim()
+    .replace(/[^a-zA-Z0-9._ -]+/g, '-')
     .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/-+/g, '-');
+  return cleanName || 'document';
 }
 
-function normalizeSimilarityDomain(value) {
-  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
-  return normalized || 'Unspecified';
-}
-
-function tokenizeSimilarityText(value) {
-  return normalizeSimilarityText(value)
-    .split(' ')
-    .filter((token) => token.length > 2 && !similarityStopWords.has(token));
-}
-
-function tokenSet(value) {
-  return new Set(tokenizeSimilarityText(value));
-}
-
-function jaccardSimilarity(leftSet, rightSet) {
-  if (!leftSet.size && !rightSet.size) return 0;
-  let intersection = 0;
-  for (const token of leftSet) {
-    if (rightSet.has(token)) intersection += 1;
-  }
-  const union = leftSet.size + rightSet.size - intersection;
-  return union ? intersection / union : 0;
-}
-
-function getCommonTerms(leftSet, rightSet, limit = 8) {
-  const terms = [];
-  for (const token of leftSet) {
-    if (rightSet.has(token)) terms.push(token);
-  }
-  return terms
-    .sort((left, right) => right.length - left.length || left.localeCompare(right))
-    .slice(0, limit);
-}
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: maxPdfSize },
-  fileFilter(_req, file, callback) {
-    const isPdf =
-      file.mimetype === 'application/pdf' ||
-      file.originalname.toLowerCase().endsWith('.pdf');
-    if (!isPdf) {
-      callback(new Error('Only PDF files are allowed'));
-      return;
+function parseTeam(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
     }
-    callback(null, true);
-  },
-});
+  }
+  return [];
+}
 
-function handleUpload(fieldName) {
-  return (req, res, next) => {
-    upload.single(fieldName)(req, res, (error) => {
-      if (!error) {
-        next();
-        return;
-      }
-      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-        res.status(400).json({ error: 'PDF must be 10 MB or smaller' });
-        return;
-      }
-      res.status(400).json({ error: error.message || 'Upload failed' });
-    });
+function mapUser(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    createdAt: row.created_at,
   };
+}
+
+function mapProposal(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    domain: row.domain,
+    scheme: row.scheme || '',
+    status: normalizeProposalStatus(row.status) || 'Submitted',
+    abstract: row.abstract,
+    problem: row.problem,
+    objectives: Array.isArray(row.objectives) ? row.objectives : [],
+    methodology: row.methodology,
+    techStack: Array.isArray(row.tech_stack) ? row.tech_stack : [],
+    team: parseTeam(row.team),
+    reviewNotes: row.review_notes || '',
+    studentId: row.student_id,
+    studentName: row.student_name,
+    reviewerId: row.reviewer_id || null,
+    reviewerName: row.reviewer_name || null,
+    documentCount: Number(row.document_count || 0),
+    folderCount: Number(row.folder_count || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    submittedAt: row.submitted_at,
+    lastStatusChangedAt: row.last_status_changed_at,
+  };
+}
+
+function mapFolder(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    parentId: row.parent_id,
+    proposalId: row.proposal_id,
+    studentId: row.student_id,
+    scheme: row.scheme || '',
+    color: row.color || '#0f766e',
+    documentCount: Number(row.document_count || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapDocument(row) {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    folderId: row.folder_id,
+    uploadedBy: row.uploaded_by,
+    uploadedByName: row.uploaded_by_name || null,
+    folderName: row.folder_name || null,
+    name: row.name,
+    mimeType: row.mime_type || 'application/octet-stream',
+    size: Number(row.size || 0),
+    category: row.category || 'supporting-document',
+    description: row.description || '',
+    uploadedAt: row.uploaded_at,
+    downloadUrl: `/api/documents/${row.id}/download`,
+  };
+}
+
+function mapStatusHistory(row) {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    changedBy: row.changed_by,
+    changedByName: row.changed_by_name || null,
+    fromStatus: row.from_status ? normalizeProposalStatus(row.from_status) : null,
+    toStatus: normalizeProposalStatus(row.to_status) || row.to_status,
+    note: row.note || '',
+    createdAt: row.created_at,
+  };
+}
+
+function mapActivity(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name || null,
+    action: row.action,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    details: row.details || {},
+    createdAt: row.created_at,
+  };
+}
+
+function signToken(user) {
+  const secret = process.env.JWT_SECRET || 'proposal_checker_default_secret_key_2024_xyz';
+  return jwt.sign(
+    { sub: user.id, role: user.role, name: user.name, email: user.email },
+    secret,
+    { expiresIn: '7d' },
+  );
 }
 
 function isManagedUploadPath(documentPath) {
@@ -248,465 +256,1047 @@ async function deleteStoredFile(documentPath) {
 }
 
 async function writeDocumentToFilesystem(file) {
-  const extension = path.extname(file.originalname).toLowerCase() || '.pdf';
-  const storedFileName = `${randomUUID()}${extension === '.pdf' ? extension : '.pdf'}`;
+  const extension = path.extname(file.originalname).toLowerCase() || '.bin';
+  const storedFileName = `${randomUUID()}${extension}`;
   const storedFilePath = path.join(uploadsDir, storedFileName);
   await fs.mkdir(uploadsDir, { recursive: true });
   await fs.writeFile(storedFilePath, file.buffer);
   return storedFilePath;
 }
 
-async function ensureDb() {
+async function logActivity(userId, action, entityType, entityId, details = {}) {
   try {
-    await query('select 1');
-    // Auto-migrate if tables are missing
-    const tableCheck = await query("SELECT to_regclass('public.proposals')");
-    if (!tableCheck.rows[0].to_regclass) {
-      // eslint-disable-next-line no-console
-      console.log('Tables missing, automatically running schema.sql...');
-      await query(`
-        create extension if not exists "uuid-ossp";
-
-        create table if not exists users (
-          id uuid primary key default uuid_generate_v4(),
-          name text not null,
-          email text not null unique,
-          password_hash text not null,
-          role text not null check (role in ('student', 'admin')),
-          created_at timestamptz not null default now()
-        );
-
-        create table if not exists proposals (
-          id uuid primary key default uuid_generate_v4(),
-          title text not null,
-          domain text not null,
-          status text not null check (status in ('Pending', 'In Review', 'Approved', 'Revision Requested', 'Rejected')),
-          student_id uuid not null unique references users(id) on delete cascade,
-          reviewer_id uuid references users(id) on delete set null,
-          abstract text not null,
-          problem text not null,
-          objectives text[] not null default '{}',
-          methodology text not null,
-          tech_stack text[] not null default '{}',
-          team jsonb not null default '[]'::jsonb,
-          created_at timestamptz not null default now(),
-          updated_at timestamptz not null default now()
-        );
-
-        create index if not exists proposals_student_id_idx on proposals(student_id);
-        create index if not exists proposals_status_idx on proposals(status);
-
-        create table if not exists proposal_evaluations (
-          id uuid primary key default uuid_generate_v4(),
-          proposal_id uuid not null unique references proposals(id) on delete cascade,
-          evaluator_id uuid not null references users(id) on delete cascade,
-          criteria jsonb not null,
-          overall_score numeric(4,1) not null,
-          recommendation text not null check (recommendation in ('Approve', 'Revise', 'Reject')),
-          strengths text not null,
-          risks text not null,
-          summary text not null,
-          created_at timestamptz not null default now(),
-          updated_at timestamptz not null default now()
-        );
-
-        create index if not exists proposal_evaluations_evaluator_id_idx on proposal_evaluations(evaluator_id);
-
-        create table if not exists workspace_settings (
-          id text primary key,
-          submission_deadline timestamptz,
-          review_deadline timestamptz,
-          created_at timestamptz not null default now(),
-          updated_at timestamptz not null default now()
-        );
-
-        create table if not exists folders (
-          id uuid primary key default uuid_generate_v4(),
-          name text not null,
-          parent_id uuid references folders(id) on delete cascade,
-          student_id uuid not null references users(id) on delete cascade,
-          created_at timestamptz not null default now(),
-          updated_at timestamptz not null default now()
-        );
-
-        create index if not exists folders_student_id_idx on folders(student_id);
-
-        create table if not exists documents (
-          id uuid primary key default uuid_generate_v4(),
-          proposal_id uuid not null references proposals(id) on delete cascade,
-          folder_id uuid references folders(id) on delete cascade,
-          name text not null,
-          path text not null,
-          data bytea,
-          mime_type text not null,
-          size integer not null,
-          uploaded_at timestamptz not null default now()
-        );
-
-        create index if not exists documents_proposal_id_idx on documents(proposal_id);
-        create index if not exists documents_folder_id_idx on documents(folder_id);
-
-        create table if not exists activity_logs (
-          id uuid primary key default uuid_generate_v4(),
-          user_id uuid references users(id) on delete cascade,
-          action text not null,
-          entity_type text not null,
-          entity_id text,
-          details jsonb,
-          created_at timestamptz not null default now()
-        );
-
-        create index if not exists activity_logs_created_at_idx on activity_logs(created_at desc);
-
-        insert into workspace_settings (id)
-        values ('default')
-        on conflict (id) do nothing;
-
-        create or replace function set_updated_at()
-        returns trigger as $$
-        begin
-          new.updated_at = now();
-          return new;
-        end;
-        $$ language plpgsql;
-
-        drop trigger if exists proposals_set_updated_at on proposals;
-        create trigger proposals_set_updated_at
-        before update on proposals
-        for each row
-        execute function set_updated_at();
-
-        drop trigger if exists proposal_evaluations_set_updated_at on proposal_evaluations;
-        create trigger proposal_evaluations_set_updated_at
-        before update on proposal_evaluations
-        for each row
-        execute function set_updated_at();
-
-        drop trigger if exists workspace_settings_set_updated_at on workspace_settings;
-        create trigger workspace_settings_set_updated_at
-        before update on workspace_settings
-        for each row
-        execute function set_updated_at();
-
-        drop trigger if exists folders_set_updated_at on folders;
-        create trigger folders_set_updated_at
-        before update on folders
-        for each row
-        execute function set_updated_at();
-      `);
-    }
-  } catch (e) {
+    await query(
+      `insert into activity_logs (user_id, action, entity_type, entity_id, details)
+       values ($1, $2, $3, $4, $5)`,
+      [userId || null, action, entityType, entityId || null, JSON.stringify(details)],
+    );
+  } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('Database connection failed. Check Postgres + DATABASE_URL. Error:', e?.message || e);
-    throw e;
+    console.error('Failed to save activity log:', error);
   }
 }
 
+let initializationPromise = null;
+let initialized = false;
 
+async function ensureDb() {
+  if (initialized) return;
+  if (initializationPromise) return initializationPromise;
+
+  initializationPromise = (async () => {
+    await query('select 1');
+    const schemaSql = readFileSync(schemaFile, 'utf8');
+    await query(schemaSql);
+    initialized = true;
+  })().catch((error) => {
+    initializationPromise = null;
+    throw error;
+  });
+
+  return initializationPromise;
+}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: maxUploadSize },
+  fileFilter(_req, file, callback) {
+    const extension = path.extname(file.originalname).toLowerCase();
+    const mimeType = String(file.mimetype || '').toLowerCase();
+    const allowed = allowedUploadExtensions.has(extension) || allowedUploadMimeTypes.has(mimeType);
+    if (!allowed) {
+      callback(
+        new Error(
+          'Supported files: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, PNG, JPG, TXT, and ZIP',
+        ),
+      );
+      return;
+    }
+    callback(null, true);
+  },
+});
+
+function handleUpload(fieldName) {
+  return (req, res, next) => {
+    upload.single(fieldName)(req, res, (error) => {
+      if (!error) {
+        next();
+        return;
+      }
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ error: 'File must be 20 MB or smaller' });
+        return;
+      }
+      res.status(400).json({ error: error.message || 'Upload failed' });
+    });
+  };
+}
+
+async function getProposalAccessRow(proposalId) {
+  const result = await query(
+    `select
+       p.id,
+       p.student_id,
+       p.status,
+       p.title,
+       p.review_notes
+     from proposals p
+     where p.id = $1`,
+    [proposalId],
+  );
+  return result.rows[0] || null;
+}
+
+function canAccessProposal(user, proposalRow) {
+  return user.role === 'admin' || proposalRow.student_id === user.sub;
+}
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin not allowed by CORS: ${origin || 'unknown'}`));
+    },
+    credentials: false,
+  }),
+);
+app.use(express.json({ limit: '4mb' }));
+
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api', (_req, res) => {
+  res.json({ service: 'project-proposal-checker-api', ok: true, health: '/api/health' });
+});
+
+app.use('/api', (req, res, next) => {
+  ensureDb()
+    .then(() => next())
+    .catch((error) => {
+      res
+        .status(503)
+        .json({ error: `Service unavailable: ${error?.message || 'database initialization failed'}` });
+    });
+});
 
 const registerSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
+  name: z.string().trim().min(1),
+  email: z.string().trim().email(),
   password: z.string().min(6),
+});
+
+const createUserSchema = registerSchema.extend({
   role: z.enum(['student', 'admin']).default('student'),
 });
 
-app.post('/api/auth/register', asyncRoute(async (req, res) => {
-  const parsed = registerSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-  const { name, email, password, role } = parsed.data;
+const proposalPayloadSchema = z.object({
+  title: z.string().trim().min(1),
+  domain: z.string().trim().min(1),
+  scheme: z.string().trim().max(120).optional().default(''),
+  abstract: z.string().trim().min(1),
+  problem: z.string().trim().min(1),
+  objectives: z.array(z.string().trim().min(1)).default([]),
+  methodology: z.string().trim().min(1),
+  techStack: z.array(z.string().trim().min(1)).default([]),
+  team: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1),
+        role: z.string().trim().min(1),
+      }),
+    )
+    .default([]),
+});
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  try {
-    const result = await query(
-      `insert into users (name, email, password_hash, role)
-       values ($1, $2, $3, $4)
-       returning id, name, email, role`,
-      [name, email.toLowerCase(), passwordHash, role]
-    );
-    const user = result.rows[0];
-    const secret = process.env.JWT_SECRET || 'proposal_checker_default_secret_key_2024_xyz';
-    const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, secret, {
-      expiresIn: '7d',
-    });
-    return res.json({ token, user });
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error('Register failed:', e);
-    if (String(e?.message || '').includes('users_email_key')) {
-      return res.status(409).json({ error: 'Email already exists' });
+const proposalStatusSchema = z.object({
+  status: z.string().trim().min(1),
+  note: z.string().max(2000).optional().default(''),
+});
+
+const folderSchema = z.object({
+  name: z.string().trim().min(1),
+  proposalId: z.string().uuid(),
+  parentId: z.string().uuid().nullable().optional(),
+  scheme: z.string().trim().max(120).optional().default(''),
+  color: z.string().trim().max(24).optional().default('#0f766e'),
+});
+
+const listFilterSchema = z.object({
+  proposalId: z.string().uuid().optional(),
+  folderId: z.string().uuid().optional(),
+});
+
+const logFilterSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(250).optional().default(100),
+});
+
+app.post(
+  '/api/auth/register',
+  asyncRoute(async (req, res) => {
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid registration payload' });
     }
-    return res.status(500).json({ error: 'Server error' });
-  }
-}));
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+    const { name, email, password } = parsed.data;
+    const passwordHash = await bcrypt.hash(password, 10);
 
-app.post('/api/auth/login', asyncRoute(async (req, res) => {
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-  const { email, password } = parsed.data;
+    try {
+      const result = await query(
+        `insert into users (name, email, password_hash, role)
+         values ($1, $2, $3, 'student')
+         returning id, name, email, role, created_at`,
+        [name, normalizeEmail(email), passwordHash],
+      );
 
-  const result = await query(`select id, name, email, role, password_hash from users where email = $1`, [email.toLowerCase()]);
-  const row = result.rows[0];
-  if (!row) return res.status(401).json({ error: 'Invalid credentials' });
+      const user = mapUser(result.rows[0]);
+      const token = signToken(user);
+      await logActivity(user.id, 'REGISTER', 'user', user.id, { email: user.email });
+      return res.status(201).json({ token, user });
+    } catch (error) {
+      if (String(error?.message || '').includes('users_email_key')) {
+        return res.status(409).json({ error: 'Email already exists' });
+      }
+      throw error;
+    }
+  }),
+);
 
-  const ok = await bcrypt.compare(password, row.password_hash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+app.post(
+  '/api/auth/login',
+  asyncRoute(async (req, res) => {
+    const parsed = z
+      .object({
+        email: z.string().trim().email(),
+        password: z.string().min(1),
+      })
+      .safeParse(req.body);
 
-  const user = { id: row.id, name: row.name, email: row.email, role: row.role };
-  const secret = process.env.JWT_SECRET || 'proposal_checker_default_secret_key_2024_xyz';
-  const token = jwt.sign({ sub: user.id, role: user.role, name: user.name, email: user.email }, secret, {
-    expiresIn: '7d',
-  });
-  return res.json({ token, user });
-}));
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid login payload' });
+    }
 
-const proposalCreateSchema = z.object({
-  title: z.string().min(1),
-  domain: z.string().min(1),
-  abstract: z.string().min(1),
-  problem: z.string().min(1),
-  objectives: z.array(z.string().min(1)).default([]),
-  methodology: z.string().min(1),
-  techStack: z.array(z.string().min(1)).default([]),
-  team: z.array(z.object({ name: z.string().min(1), role: z.string().min(1) })).default([]),
-});
+    const { email, password } = parsed.data;
+    const result = await query(
+      `select id, name, email, role, password_hash, created_at
+       from users
+       where email = $1`,
+      [normalizeEmail(email)],
+    );
+    const row = result.rows[0];
+    if (!row) return res.status(401).json({ error: 'Invalid credentials' });
 
-app.get('/api/proposals', requireAuth, asyncRoute(async (req, res) => {
-  const role = req.user.role;
-  const userId = req.user.sub;
+    const passwordMatches = await bcrypt.compare(password, row.password_hash);
+    if (!passwordMatches) return res.status(401).json({ error: 'Invalid credentials' });
 
-  if (role === 'student') {
+    const user = mapUser(row);
+    const token = signToken(user);
+    await logActivity(user.id, 'LOGIN', 'user', user.id, {});
+    return res.json({ token, user });
+  }),
+);
+
+app.get(
+  '/api/auth/me',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const result = await query(
+      `select id, name, email, role, created_at
+       from users
+       where id = $1`,
+      [req.user.sub],
+    );
+    const row = result.rows[0];
+    if (!row) return res.status(401).json({ error: 'Unauthorized' });
+    return res.json({ user: mapUser(row) });
+  }),
+);
+
+app.get(
+  '/api/proposals',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const params = [];
+    let whereClause = '';
+
+    if (req.user.role === 'student') {
+      params.push(req.user.sub);
+      whereClause = `where p.student_id = $${params.length}`;
+    }
+
     const result = await query(
       `select
-         p.id, p.title, p.domain, p.status, p.updated_at, u.name as student
-     from proposals p
+         p.id,
+         p.title,
+         p.domain,
+         p.scheme,
+         p.status,
+         p.abstract,
+         p.problem,
+         p.objectives,
+         p.methodology,
+         p.tech_stack,
+         p.team,
+         p.review_notes,
+         p.student_id,
+         p.reviewer_id,
+         p.created_at,
+         p.updated_at,
+         p.submitted_at,
+         p.last_status_changed_at,
+         u.name as student_name,
+         r.name as reviewer_name,
+         coalesce(dc.document_count, 0) as document_count,
+         coalesce(fc.folder_count, 0) as folder_count
+       from proposals p
        join users u on u.id = p.student_id
-       
-       left join users ev on ev.id = pe.evaluator_id
-       where p.student_id = $1
+       left join users r on r.id = p.reviewer_id
+       left join (
+         select proposal_id, count(*)::int as document_count
+         from documents
+         group by proposal_id
+       ) dc on dc.proposal_id = p.id
+       left join (
+         select proposal_id, count(*)::int as folder_count
+         from folders
+         group by proposal_id
+       ) fc on fc.proposal_id = p.id
+       ${whereClause}
        order by p.updated_at desc`,
-      [userId]
+      params,
     );
+
+    return res.json({ items: result.rows.map(mapProposal) });
+  }),
+);
+
+app.get(
+  '/api/proposals/:id',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const proposalRow = await getProposalAccessRow(req.params.id);
+    if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
+    if (!canAccessProposal(req.user, proposalRow)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const summaryResult = await query(
+      `select
+         p.id,
+         p.title,
+         p.domain,
+         p.scheme,
+         p.status,
+         p.abstract,
+         p.problem,
+         p.objectives,
+         p.methodology,
+         p.tech_stack,
+         p.team,
+         p.review_notes,
+         p.student_id,
+         p.reviewer_id,
+         p.created_at,
+         p.updated_at,
+         p.submitted_at,
+         p.last_status_changed_at,
+         u.name as student_name,
+         r.name as reviewer_name,
+         coalesce(dc.document_count, 0) as document_count,
+         coalesce(fc.folder_count, 0) as folder_count
+       from proposals p
+       join users u on u.id = p.student_id
+       left join users r on r.id = p.reviewer_id
+       left join (
+         select proposal_id, count(*)::int as document_count
+         from documents
+         group by proposal_id
+       ) dc on dc.proposal_id = p.id
+       left join (
+         select proposal_id, count(*)::int as folder_count
+         from folders
+         group by proposal_id
+       ) fc on fc.proposal_id = p.id
+       where p.id = $1`,
+      [req.params.id],
+    );
+
+    const foldersResult = await query(
+      `select
+         f.*,
+         coalesce(count(d.id), 0)::int as document_count
+       from folders f
+       left join documents d on d.folder_id = f.id
+       where f.proposal_id = $1
+       group by f.id
+       order by f.parent_id nulls first, f.created_at asc, f.name asc`,
+      [req.params.id],
+    );
+
+    const documentsResult = await query(
+      `select
+         d.*,
+         u.name as uploaded_by_name,
+         f.name as folder_name
+       from documents d
+       left join users u on u.id = d.uploaded_by
+       left join folders f on f.id = d.folder_id
+       where d.proposal_id = $1
+       order by d.uploaded_at desc`,
+      [req.params.id],
+    );
+
+    const historyResult = await query(
+      `select
+         h.*,
+         u.name as changed_by_name
+       from proposal_status_history h
+       left join users u on u.id = h.changed_by
+       where h.proposal_id = $1
+       order by h.created_at desc`,
+      [req.params.id],
+    );
+
+    return res.json({
+      item: mapProposal(summaryResult.rows[0]),
+      folders: foldersResult.rows.map(mapFolder),
+      documents: documentsResult.rows.map(mapDocument),
+      history: historyResult.rows.map(mapStatusHistory),
+    });
+  }),
+);
+
+app.post(
+  '/api/proposals',
+  requireAuth,
+  requireRole(['student']),
+  asyncRoute(async (req, res) => {
+    const parsed = proposalPayloadSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid project payload' });
+
+    const existing = await query(`select id from proposals where student_id = $1`, [req.user.sub]);
+    if (existing.rows.length > 0) {
+      return res.status(403).json({ error: 'Each user can create only one project proposal.' });
+    }
+
+    const payload = parsed.data;
+    const insertResult = await query(
+      `insert into proposals
+        (title, domain, scheme, status, student_id, abstract, problem, objectives, methodology, tech_stack, team, review_notes)
+       values
+        ($1, $2, $3, 'Submitted', $4, $5, $6, $7, $8, $9, $10, '')
+       returning id`,
+      [
+        payload.title,
+        payload.domain,
+        payload.scheme,
+        req.user.sub,
+        payload.abstract,
+        payload.problem,
+        payload.objectives,
+        payload.methodology,
+        payload.techStack,
+        JSON.stringify(payload.team),
+      ],
+    );
+
+    const proposalId = insertResult.rows[0].id;
+
+    await query(
+      `insert into proposal_status_history (proposal_id, changed_by, from_status, to_status, note)
+       values ($1, $2, null, 'Submitted', 'Project created')`,
+      [proposalId, req.user.sub],
+    );
+    await logActivity(req.user.sub, 'CREATE_PROPOSAL', 'proposal', proposalId, {
+      title: payload.title,
+      domain: payload.domain,
+      scheme: payload.scheme,
+    });
+
+    return res.status(201).json({ id: proposalId });
+  }),
+);
+
+app.put(
+  '/api/proposals/:id',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsed = proposalPayloadSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid project payload' });
+
+    const proposalRow = await getProposalAccessRow(req.params.id);
+    if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
+    if (!canAccessProposal(req.user, proposalRow)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const payload = parsed.data;
+    await query(
+      `update proposals
+       set title = $2,
+           domain = $3,
+           scheme = $4,
+           abstract = $5,
+           problem = $6,
+           objectives = $7,
+           methodology = $8,
+           tech_stack = $9,
+           team = $10
+       where id = $1`,
+      [
+        req.params.id,
+        payload.title,
+        payload.domain,
+        payload.scheme,
+        payload.abstract,
+        payload.problem,
+        payload.objectives,
+        payload.methodology,
+        payload.techStack,
+        JSON.stringify(payload.team),
+      ],
+    );
+
+    await logActivity(req.user.sub, 'UPDATE_PROPOSAL', 'proposal', req.params.id, {
+      title: payload.title,
+      domain: payload.domain,
+    });
+
+    return res.json({ ok: true });
+  }),
+);
+
+app.patch(
+  '/api/proposals/:id/status',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsed = proposalStatusSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid status payload' });
+
+    const nextStatus = normalizeProposalStatus(parsed.data.status);
+    if (!nextStatus || nextStatus === 'Draft') {
+      return res.status(400).json({ error: 'Unsupported status value' });
+    }
+
+    const proposalRow = await getProposalAccessRow(req.params.id);
+    if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
+    if (!canAccessProposal(req.user, proposalRow)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const previousStatus = normalizeProposalStatus(proposalRow.status) || proposalRow.status;
+    const reviewerId = req.user.role === 'admin' ? req.user.sub : null;
+    await query(
+      `update proposals
+       set status = $2,
+           review_notes = $3,
+           reviewer_id = coalesce($4, reviewer_id),
+           last_status_changed_at = now()
+       where id = $1`,
+      [req.params.id, nextStatus, parsed.data.note, reviewerId],
+    );
+
+    await query(
+      `insert into proposal_status_history (proposal_id, changed_by, from_status, to_status, note)
+       values ($1, $2, $3, $4, $5)`,
+      [req.params.id, req.user.sub, previousStatus, nextStatus, parsed.data.note],
+    );
+    await logActivity(req.user.sub, 'UPDATE_PROPOSAL_STATUS', 'proposal', req.params.id, {
+      fromStatus: previousStatus,
+      toStatus: nextStatus,
+      note: parsed.data.note,
+    });
+
+    return res.json({ ok: true, status: nextStatus });
+  }),
+);
+
+app.delete(
+  '/api/proposals/:id',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    const proposalResult = await query(
+      `select id, title
+       from proposals
+       where id = $1`,
+      [req.params.id],
+    );
+    const proposal = proposalResult.rows[0];
+    if (!proposal) return res.status(404).json({ error: 'Project not found' });
+
+    const documentsResult = await query(
+      `select path
+       from documents
+       where proposal_id = $1`,
+      [req.params.id],
+    );
+
+    await query(`delete from proposals where id = $1`, [req.params.id]);
+
+    await Promise.all(
+      documentsResult.rows.map((row) => deleteStoredFile(row.path)),
+    );
+    await logActivity(req.user.sub, 'DELETE_PROPOSAL', 'proposal', req.params.id, {
+      title: proposal.title,
+    });
+
+    return res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/folders',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsed = listFilterSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid folder filter' });
+
+    const params = [];
+    const filters = [];
+
+    if (req.user.role === 'student') {
+      params.push(req.user.sub);
+      filters.push(`p.student_id = $${params.length}`);
+    }
+    if (parsed.data.proposalId) {
+      params.push(parsed.data.proposalId);
+      filters.push(`f.proposal_id = $${params.length}`);
+    }
+
+    const whereClause = filters.length ? `where ${filters.join(' and ')}` : '';
+    const result = await query(
+      `select
+         f.*,
+         coalesce(count(d.id), 0)::int as document_count
+       from folders f
+       join proposals p on p.id = f.proposal_id
+       left join documents d on d.folder_id = f.id
+       ${whereClause}
+       group by f.id
+       order by f.parent_id nulls first, f.created_at asc, f.name asc`,
+      params,
+    );
+
+    return res.json({ items: result.rows.map(mapFolder) });
+  }),
+);
+
+app.post(
+  '/api/folders',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsed = folderSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid folder payload' });
+
+    const proposalRow = await getProposalAccessRow(parsed.data.proposalId);
+    if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
+    if (!canAccessProposal(req.user, proposalRow)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (parsed.data.parentId) {
+      const parentResult = await query(
+        `select id, proposal_id
+         from folders
+         where id = $1`,
+        [parsed.data.parentId],
+      );
+      const parent = parentResult.rows[0];
+      if (!parent || parent.proposal_id !== parsed.data.proposalId) {
+        return res.status(400).json({ error: 'Parent folder does not belong to this project' });
+      }
+    }
+
+    const insertResult = await query(
+      `insert into folders (name, parent_id, proposal_id, student_id, scheme, color)
+       values ($1, $2, $3, $4, $5, $6)
+       returning *`,
+      [
+        parsed.data.name,
+        parsed.data.parentId || null,
+        parsed.data.proposalId,
+        proposalRow.student_id,
+        parsed.data.scheme,
+        parsed.data.color,
+      ],
+    );
+
+    await logActivity(req.user.sub, 'CREATE_FOLDER', 'folder', insertResult.rows[0].id, {
+      proposalId: parsed.data.proposalId,
+      name: parsed.data.name,
+      parentId: parsed.data.parentId || null,
+    });
+
+    return res.status(201).json({ item: mapFolder(insertResult.rows[0]) });
+  }),
+);
+
+app.delete(
+  '/api/folders/:id',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    const folderResult = await query(
+      `select id, name, proposal_id
+       from folders
+       where id = $1`,
+      [req.params.id],
+    );
+    const folder = folderResult.rows[0];
+    if (!folder) return res.status(404).json({ error: 'Folder not found' });
+
+    await query(`delete from folders where id = $1`, [req.params.id]);
+    await logActivity(req.user.sub, 'DELETE_FOLDER', 'folder', req.params.id, {
+      proposalId: folder.proposal_id,
+      name: folder.name,
+    });
+
+    return res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/documents',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsed = listFilterSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid document filter' });
+
+    const params = [];
+    const filters = [];
+
+    if (req.user.role === 'student') {
+      params.push(req.user.sub);
+      filters.push(`p.student_id = $${params.length}`);
+    }
+    if (parsed.data.proposalId) {
+      params.push(parsed.data.proposalId);
+      filters.push(`d.proposal_id = $${params.length}`);
+    }
+    if (parsed.data.folderId) {
+      params.push(parsed.data.folderId);
+      filters.push(`d.folder_id = $${params.length}`);
+    }
+
+    const whereClause = filters.length ? `where ${filters.join(' and ')}` : '';
+    const result = await query(
+      `select
+         d.*,
+         u.name as uploaded_by_name,
+         f.name as folder_name
+       from documents d
+       join proposals p on p.id = d.proposal_id
+       left join users u on u.id = d.uploaded_by
+       left join folders f on f.id = d.folder_id
+       ${whereClause}
+       order by d.uploaded_at desc`,
+      params,
+    );
+
+    return res.json({ items: result.rows.map(mapDocument) });
+  }),
+);
+
+app.post(
+  '/api/documents',
+  requireAuth,
+  handleUpload('document'),
+  asyncRoute(async (req, res) => {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'File is required' });
+
+    const proposalId = String(req.body.proposalId || '').trim();
+    const folderId = String(req.body.folderId || '').trim() || null;
+    const category = String(req.body.category || 'supporting-document').trim() || 'supporting-document';
+    const description = String(req.body.description || '').trim();
+
+    if (!proposalId) return res.status(400).json({ error: 'proposalId is required' });
+
+    const proposalRow = await getProposalAccessRow(proposalId);
+    if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
+    if (!canAccessProposal(req.user, proposalRow)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (folderId) {
+      const folderResult = await query(
+        `select id
+         from folders
+         where id = $1 and proposal_id = $2`,
+        [folderId, proposalId],
+      );
+      if (!folderResult.rows[0]) {
+        return res.status(400).json({ error: 'Folder does not belong to this project' });
+      }
+    }
+
+    const documentName = sanitizeFileName(file.originalname);
+    const mimeType = file.mimetype || 'application/octet-stream';
+
+    let insertResult;
+    if (documentStorageMode === 'filesystem') {
+      const storedFilePath = await writeDocumentToFilesystem(file);
+      insertResult = await query(
+        `insert into documents
+          (proposal_id, folder_id, uploaded_by, name, path, storage_mode, mime_type, size, category, description)
+         values
+          ($1, $2, $3, $4, $5, 'filesystem', $6, $7, $8, $9)
+         returning *`,
+        [
+          proposalId,
+          folderId,
+          req.user.sub,
+          documentName,
+          storedFilePath,
+          mimeType,
+          file.size,
+          category,
+          description,
+        ],
+      );
+    } else {
+      insertResult = await query(
+        `insert into documents
+          (proposal_id, folder_id, uploaded_by, name, path, storage_mode, data, mime_type, size, category, description)
+         values
+          ($1, $2, $3, $4, 'db', 'database', $5, $6, $7, $8, $9)
+         returning *`,
+        [
+          proposalId,
+          folderId,
+          req.user.sub,
+          documentName,
+          file.buffer,
+          mimeType,
+          file.size,
+          category,
+          description,
+        ],
+      );
+    }
+
+    await logActivity(req.user.sub, 'UPLOAD_DOCUMENT', 'document', insertResult.rows[0].id, {
+      proposalId,
+      folderId,
+      name: documentName,
+      category,
+    });
+
+    return res.status(201).json({ document: mapDocument(insertResult.rows[0]) });
+  }),
+);
+
+app.delete(
+  '/api/documents/:id',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    const result = await query(
+      `select id, name, path, proposal_id
+       from documents
+       where id = $1`,
+      [req.params.id],
+    );
+    const document = result.rows[0];
+    if (!document) return res.status(404).json({ error: 'Document not found' });
+
+    await query(`delete from documents where id = $1`, [req.params.id]);
+    await deleteStoredFile(document.path);
+    await logActivity(req.user.sub, 'DELETE_DOCUMENT', 'document', req.params.id, {
+      proposalId: document.proposal_id,
+      name: document.name,
+    });
+
+    return res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/documents/:id/download',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const result = await query(
+      `select
+         d.*,
+         p.student_id
+       from documents d
+       join proposals p on p.id = d.proposal_id
+       where d.id = $1`,
+      [req.params.id],
+    );
+    const document = result.rows[0];
+    if (!document) return res.status(404).json({ error: 'Document not found' });
+    if (req.user.role !== 'admin' && document.student_id !== req.user.sub) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    res.setHeader('Content-Type', document.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Length', Number(document.size || 0));
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${sanitizeFileName(document.name)}"`,
+    );
+
+    if (document.path && document.path !== 'db') {
+      const filePath = path.resolve(document.path);
+      if (!existsSync(filePath)) {
+        return res.status(404).json({ error: 'Document file missing on disk' });
+      }
+      createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    if (!document.data) {
+      return res.status(404).json({ error: 'Document data missing' });
+    }
+
+    res.send(document.data);
+  }),
+);
+
+app.get(
+  '/api/users',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (_req, res) => {
+    const result = await query(
+      `select
+         u.id,
+         u.name,
+         u.email,
+         u.role,
+         u.created_at,
+         coalesce(count(p.id), 0)::int as proposal_count
+       from users u
+       left join proposals p on p.student_id = u.id
+       group by u.id
+       order by u.created_at desc, u.name asc`,
+    );
+
     return res.json({
       items: result.rows.map((row) => ({
         id: row.id,
-        title: row.title,
-        domain: row.domain,
-        status: row.status,
-        updated_at: row.updated_at,
-        student: row.student,
-        
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        createdAt: row.created_at,
+        proposalCount: Number(row.proposal_count || 0),
       })),
     });
-  }
+  }),
+);
 
-  const result = await query(
-    `select
-       p.id, p.title, p.domain, p.status, p.updated_at, u.name as student, r.name as reviewer,
-       pe.criteria as evaluation_criteria,
-       pe.overall_score as evaluation_overall_score,
-       pe.recommendation as evaluation_recommendation,
-       pe.strengths as evaluation_strengths,
-       pe.risks as evaluation_risks,
-       pe.summary as evaluation_summary,
-       ev.name as evaluator_name,
-       pe.updated_at as evaluation_updated_at
-     from proposals p
-     join users u on u.id = p.student_id
-     
-     left join users ev on ev.id = pe.evaluator_id
-     order by p.updated_at desc
-     limit 200`
-  );
-  return res.json({
-    items: result.rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      domain: row.domain,
-      status: row.status,
-      updated_at: row.updated_at,
-      student: row.student,
-      
-    })),
-  });
-}));
+app.post(
+  '/api/users',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    const parsed = createUserSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid user payload' });
 
-app.get('/api/proposals/:id', requireAuth, asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  const role = req.user.role;
-  const userId = req.user.sub;
+    const passwordHash = await bcrypt.hash(parsed.data.password, 10);
+    try {
+      const result = await query(
+        `insert into users (name, email, password_hash, role)
+         values ($1, $2, $3, $4)
+         returning id`,
+        [
+          parsed.data.name,
+          normalizeEmail(parsed.data.email),
+          passwordHash,
+          parsed.data.role,
+        ],
+      );
 
-  const result = await query(
-    `select
-       p.id, p.title, p.domain, p.status, p.abstract, p.problem, p.objectives, p.methodology, p.tech_stack,
-       p.team, p.created_at, p.updated_at,
-       u.id as student_id, u.name as student,
-       r.id as reviewer_id, r.name as reviewer,
-       pe.criteria as evaluation_criteria,
-       pe.overall_score as evaluation_overall_score,
-       pe.recommendation as evaluation_recommendation,
-       pe.strengths as evaluation_strengths,
-       pe.risks as evaluation_risks,
-       pe.summary as evaluation_summary,
-       ev.name as evaluator_name,
-       pe.updated_at as evaluation_updated_at
-     from proposals p
-     join users u on u.id = p.student_id
-     
-     left join users ev on ev.id = pe.evaluator_id
-     where p.id = $1`,
-    [id]
-  );
-  const row = result.rows[0];
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  if (role === 'student' && row.student_id !== userId) return res.status(403).json({ error: 'Forbidden' });
-  return res.json({
-    item: {
-      ...row,
-      evaluation: mapEvaluation(row),
-    },
-  });
-}));
+      await logActivity(req.user.sub, 'CREATE_USER', 'user', result.rows[0].id, {
+        email: normalizeEmail(parsed.data.email),
+        role: parsed.data.role,
+      });
 
-app.post('/api/proposals', requireAuth, requireRole(['student']), asyncRoute(async (req, res) => {
-  const parsed = proposalCreateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-  const userId = req.user.sub;
-  const data = parsed.data;
+      return res.status(201).json({ id: result.rows[0].id });
+    } catch (error) {
+      if (String(error?.message || '').includes('users_email_key')) {
+        return res.status(409).json({ error: 'Email already exists' });
+      }
+      throw error;
+    }
+  }),
+);
 
-  const settingsResult = await query(
-    `select submission_deadline
-     from workspace_settings
-     where id = 'default'`
-  );
-  const submissionDeadline = settingsResult.rows[0]?.submission_deadline;
-  if (submissionDeadline && new Date(submissionDeadline).getTime() < Date.now()) {
-    return res.status(403).json({ error: 'The submission deadline has passed.' });
-  }
+app.delete(
+  '/api/users/:id',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    if (req.params.id === req.user.sub) {
+      return res.status(400).json({ error: 'You cannot delete your own admin account.' });
+    }
 
-  const existingProposal = await query(
-    `select id from proposals where student_id = $1`,
-    [userId]
-  );
-  if (existingProposal.rows.length > 0) {
-    return res.status(403).json({ error: 'You can only create 1 proposal.' });
-  }
-
-  const result = await query(
-    `insert into proposals
-      (title, domain, status, student_id, abstract, problem, objectives, methodology, tech_stack, team)
-     values
-      ($1, $2, 'Pending', $3, $4, $5, $6, $7, $8, $9)
-     returning id`,
-    [
-      data.title,
-      data.domain,
-      userId,
-      data.abstract,
-      data.problem,
-      data.objectives,
-      data.methodology,
-      data.techStack,
-      JSON.stringify(data.team),
-    ]
-  );
-  
-  await logActivity(userId, 'CREATE_PROPOSAL', 'proposal', result.rows[0].id, { title: data.title });
-
-  return res.status(201).json({ id: result.rows[0].id });
-}));
-
-app.delete('/api/proposals/:id', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const id = req.params.id;
-
-  const result = await query(
-    `select id, title, student_id, document_path
-     from proposals
-     where id = $1`,
-    [id]
-  );
-  const row = result.rows[0];
-  if (!row) return res.status(404).json({ error: 'Proposal not found' });
-
-  await query(`delete from proposals where id = $1`, [id]);
-
-  const remainingProposals = await query(`select count(*)::int as count from proposals`);
-  if ((remainingProposals.rows[0]?.count ?? 0) === 0) {
-    await query(
-      `update workspace_settings
-       set submission_deadline = null,
-           review_deadline = null
-       where id = 'default'`
+    const userResult = await query(
+      `select id, name, email
+       from users
+       where id = $1`,
+      [req.params.id],
     );
+    const user = userResult.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const documentPathsResult = await query(
+      `select d.path
+       from documents d
+       join proposals p on p.id = d.proposal_id
+       where p.student_id = $1`,
+      [req.params.id],
+    );
+
+    await query(`delete from users where id = $1`, [req.params.id]);
+    await Promise.all(documentPathsResult.rows.map((row) => deleteStoredFile(row.path)));
+    await logActivity(req.user.sub, 'DELETE_USER', 'user', req.params.id, {
+      email: user.email,
+      name: user.name,
+    });
+
+    return res.json({ ok: true });
+  }),
+);
+
+app.get(
+  '/api/logs',
+  requireAuth,
+  requireRole(['admin']),
+  asyncRoute(async (req, res) => {
+    const parsed = logFilterSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid log filter' });
+
+    const result = await query(
+      `select
+         l.*,
+         u.name as user_name
+       from activity_logs l
+       left join users u on u.id = l.user_id
+       order by l.created_at desc
+       limit $1`,
+      [parsed.data.limit],
+    );
+
+    return res.json({ items: result.rows.map(mapActivity) });
+  }),
+);
+
+app.get('/', (_req, res) => {
+  if (hasFrontendBuild) {
+    res.sendFile(frontendEntryFile);
+    return;
   }
 
-  await deleteStoredFile(row.document_path);
-
-  return res.json({ ok: true, id: row.id, title: row.title });
-}));
-
-const proposalUpdateStatusSchema = z.object({
-  status: z.enum(['Pending', 'In Review', 'Approved', 'Revision Requested', 'Rejected']),
-  reviewerId: z.string().uuid().optional().nullable(),
+  res.json({
+    service: 'project-proposal-checker-api',
+    ok: true,
+    health: '/api/health',
+  });
 });
-
-app.patch('/api/proposals/:id/status', requireAuth, asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  const { status } = req.body;
-  if (!status) return res.status(400).json({ error: 'Status is required' });
-
-  // Verify ownership or admin role
-  const check = await query('select student_id from proposals where id = $1', [id]);
-  if (!check.rowCount) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role === 'student' && check.rows[0].student_id !== req.user.sub) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-
-  await query(`update proposals set status = $2, updated_at = now() where id = $1`, [id, status]);
-  await logActivity(req.user.sub, 'UPDATE_STATUS', 'proposal', id, { status });
-  return res.json({ success: true, status });
-}));
-
-const evaluationCriteriaSchema = z.object({
-  problemClarity: z.number().min(1).max(10),
-  technicalFeasibility: z.number().min(1).max(10),
-  methodologyStrength: z.number().min(1).max(10),
-  innovation: z.number().min(1).max(10),
-  impact: z.number().min(1).max(10),
-  documentationReadiness: z.number().min(1).max(10),
-});
-
-
-app.post('/api/users', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const { name, email, password, role } = req.body;
-  if (!name || !email || !password || !role) return res.status(400).json({ error: 'Missing fields' });
-  const hash = await bcrypt.hash(password, 10);
-  const result = await query(
-    `insert into users (name, email, password_hash, role) values ($1, $2, $3, $4) returning id`,
-    [name, email, hash, role]
-  );
-  return res.json({ id: result.rows[0].id });
-}));
-
-app.delete('/api/users/:id', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  await query('delete from users where id = $1', [req.params.id]);
-  return res.json({ success: true });
-}));
-
-app.get('/api/users', requireAuth, requireRole(['admin']), asyncRoute(async (_req, res) => {
-  const result = await query(
-    `select id, name, email, role, created_at
-     from users
-     order by created_at desc
-     limit 200`
-  );
-  return res.json({ items: result.rows });
-}));
 
 if (hasFrontendBuild) {
   app.use(express.static(frontendDistDir));
@@ -715,135 +1305,18 @@ if (hasFrontendBuild) {
   });
 }
 
-app.use((err, _req, res, _next) => {
+app.use((error, _req, res, _next) => {
   // eslint-disable-next-line no-console
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Server error' });
+  console.error('Unhandled error:', error);
+  res.status(500).json({ error: error?.message || 'Server error' });
 });
-
-app.get('/api/folders', requireAuth, asyncRoute(async (req, res) => {
-  const result = await query(`select * from folders where student_id = $1 order by created_at desc`, [req.user.sub]);
-  return res.json({ items: result.rows });
-}));
-
-app.post('/api/folders', requireAuth, requireRole(['student']), asyncRoute(async (req, res) => {
-  const { name, parent_id } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name is required' });
-  
-  const result = await query(
-    `insert into folders (name, parent_id, student_id, color) values ($1, $2, $3) returning *`,
-    [name, parent_id || null, req.user.sub]
-  );
-  return res.status(201).json({ item: result.rows[0] });
-}));
-
-app.delete('/api/folders/:id', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  await query(`delete from folders where id = $1`, [id]);
-  return res.json({ ok: true });
-}));
-
-app.get('/api/documents', requireAuth, asyncRoute(async (req, res) => {
-  const result = await query(`
-    select d.* from documents d
-    join proposals p on d.proposal_id = p.id
-    where p.student_id = $1
-  `, [req.user.sub]);
-  return res.json({ items: result.rows });
-}));
-
-app.post(
-  '/api/documents',
-  requireAuth,
-  requireRole(['student']),
-  handleUpload('document'),
-  asyncRoute(async (req, res) => {
-    const file = req.file;
-    const { proposal_id, folder_id } = req.body;
-    if (!file) return res.status(400).json({ error: 'File is required' });
-    if (!proposal_id) return res.status(400).json({ error: 'proposal_id is required' });
-
-    // Validate ownership
-    const proposal = await query(`select id from proposals where id = $1 and student_id = $2`, [proposal_id, req.user.sub]);
-    if (proposal.rows.length === 0) return res.status(403).json({ error: 'Forbidden' });
-
-    const documentName = sanitizeFileName(file.originalname);
-    const documentMimeType = file.mimetype || 'application/pdf';
-
-    if (documentStorageMode === 'filesystem') {
-      const storedFilePath = await writeDocumentToFilesystem(file);
-      const insertResult = await query(
-        `insert into documents (proposal_id, folder_id, name, path, mime_type, size)
-         values ($1, $2, $3, $4, $5, $6) returning *`,
-        [proposal_id, folder_id || null, documentName, storedFilePath, documentMimeType, file.size]
-      );
-      return res.status(201).json({ document: insertResult.rows[0] });
-    } else {
-      const insertResult = await query(
-        `insert into documents (proposal_id, folder_id, name, path, data, mime_type, size)
-         values ($1, $2, $3, 'db', $4, $5, $6) returning *`,
-        [proposal_id, folder_id || null, documentName, file.buffer, documentMimeType, file.size]
-      );
-      return res.status(201).json({ document: insertResult.rows[0] });
-    }
-  })
-);
-
-app.delete('/api/documents/:id', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  await query(`delete from documents where id = $1`, [id]);
-  return res.json({ ok: true });
-}));
-
-app.get('/api/documents/:id/download', requireAuth, asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  
-  const result = await query(
-    `select d.* from documents d
-     join proposals p on d.proposal_id = p.id
-     where d.id = $1`,
-    [id]
-  );
-  
-  const document = result.rows[0];
-  if (!document) return res.status(404).json({ error: 'Document not found' });
-  
-  res.setHeader('Content-Type', document.mime_type || 'application/pdf');
-  res.setHeader('Content-Length', document.size);
-  res.setHeader('Content-Disposition', `inline; filename="${document.name}"`);
-  
-  if (document.path && document.path !== 'db') {
-    const filePath = path.resolve(document.path);
-    if (!existsSync(filePath)) {
-       return res.status(404).json({ error: 'Document file missing on disk' });
-    }
-    const stream = createReadStream(filePath);
-    stream.pipe(res);
-  } else if (document.data) {
-    res.send(document.data);
-  } else {
-    res.status(404).json({ error: 'Document data missing' });
-  }
-}));
-
-app.get('/api/logs', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const result = await query(`select * from activity_logs order by created_at desc limit 100`);
-  return res.json({ items: result.rows });
-}));
 
 if (isDirectRun) {
   const port = Number(process.env.PORT || 43121);
-  initializeApp().then(() => {
-    app.listen(port, () => {
-      // eslint-disable-next-line no-console
-      console.log(`API listening on port ${port}`);
-    });
-  }).catch((e) => {
+  app.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.error('Failed to initialize app:', e);
-    process.exit(1);
+    console.log(`API listening on port ${port}`);
   });
 }
 
 export default app;
-
