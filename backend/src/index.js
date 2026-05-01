@@ -136,20 +136,6 @@ async function logActivity(userId, action, entityType, entityId, details = {}) {
   }
 }
 
-function mapEvaluation(row) {
-  if (!row || !row.evaluation_recommendation) return null;
-  return {
-    criteria: row.evaluation_criteria,
-    overallScore: Number(row.evaluation_overall_score),
-    recommendation: row.evaluation_recommendation,
-    strengths: row.evaluation_strengths,
-    risks: row.evaluation_risks,
-    summary: row.evaluation_summary,
-    evaluatorName: row.evaluator_name,
-    evaluatedAt: row.evaluation_updated_at,
-  };
-}
-
 function mapDocument(row) {
   if (!row || !row.document_name || !row.document_uploaded_at) return null;
   return {
@@ -217,66 +203,6 @@ function getCommonTerms(leftSet, rightSet, limit = 8) {
   return terms
     .sort((left, right) => right.length - left.length || left.localeCompare(right))
     .slice(0, limit);
-}
-
-function scoreSimilarityPair(left, right) {
-  const sections = [
-    { name: 'Title', weight: 0.24, left: left.title, right: right.title },
-    { name: 'Abstract', weight: 0.22, left: left.abstract, right: right.abstract },
-    { name: 'Problem statement', weight: 0.24, left: left.problem, right: right.problem },
-    { name: 'Objectives', weight: 0.12, left: (left.objectives || []).join(' '), right: (right.objectives || []).join(' ') },
-    { name: 'Methodology', weight: 0.14, left: left.methodology, right: right.methodology },
-    { name: 'Tech stack', weight: 0.04, left: (left.tech_stack || []).join(' '), right: (right.tech_stack || []).join(' ') },
-  ];
-
-  let weightedScore = 0;
-  let totalWeight = 0;
-  const sectionScores = sections.map((section) => {
-    const score = jaccardSimilarity(tokenSet(section.left), tokenSet(section.right));
-    weightedScore += score * section.weight;
-    totalWeight += section.weight;
-    return {
-      name: section.name,
-      score: Number((score * 100).toFixed(1)),
-    };
-  });
-
-  const leftDomain = normalizeSimilarityDomain(left.domain).toLowerCase();
-  const rightDomain = normalizeSimilarityDomain(right.domain).toLowerCase();
-  let score = totalWeight ? weightedScore / totalWeight : 0;
-  if (leftDomain !== 'unspecified' && leftDomain === rightDomain) {
-    score = Math.min(score + 0.05, 1);
-  }
-
-  const combinedLeft = tokenSet([
-    left.title,
-    left.abstract,
-    left.problem,
-    (left.objectives || []).join(' '),
-    left.methodology,
-    (left.tech_stack || []).join(' '),
-  ].join(' '));
-  const combinedRight = tokenSet([
-    right.title,
-    right.abstract,
-    right.problem,
-    (right.objectives || []).join(' '),
-    right.methodology,
-    (right.tech_stack || []).join(' '),
-  ].join(' '));
-
-  const scorePercent = Number((score * 100).toFixed(1));
-  const riskLevel =
-    scorePercent >= 70 ? 'High'
-      : scorePercent >= 45 ? 'Medium'
-        : 'Low';
-
-  return {
-    scorePercent,
-    riskLevel,
-    overlappingTerms: getCommonTerms(combinedLeft, combinedRight),
-    sections: sectionScores.sort((leftSection, rightSection) => rightSection.score - leftSection.score),
-  };
 }
 
 const upload = multer({
@@ -557,19 +483,10 @@ app.get('/api/proposals', requireAuth, asyncRoute(async (req, res) => {
   if (role === 'student') {
     const result = await query(
       `select
-         p.id, p.title, p.domain, p.status, p.updated_at, u.name as student, r.name as reviewer,
-         pe.criteria as evaluation_criteria,
-         pe.overall_score as evaluation_overall_score,
-         pe.recommendation as evaluation_recommendation,
-         pe.strengths as evaluation_strengths,
-         pe.risks as evaluation_risks,
-         pe.summary as evaluation_summary,
-         ev.name as evaluator_name,
-         pe.updated_at as evaluation_updated_at
-       from proposals p
+         p.id, p.title, p.domain, p.status, p.updated_at, u.name as student
+     from proposals p
        join users u on u.id = p.student_id
-       left join users r on r.id = p.reviewer_id
-       left join proposal_evaluations pe on pe.proposal_id = p.id
+       
        left join users ev on ev.id = pe.evaluator_id
        where p.student_id = $1
        order by p.updated_at desc`,
@@ -583,8 +500,7 @@ app.get('/api/proposals', requireAuth, asyncRoute(async (req, res) => {
         status: row.status,
         updated_at: row.updated_at,
         student: row.student,
-        reviewer: row.reviewer,
-        evaluation: mapEvaluation(row),
+        
       })),
     });
   }
@@ -602,8 +518,7 @@ app.get('/api/proposals', requireAuth, asyncRoute(async (req, res) => {
        pe.updated_at as evaluation_updated_at
      from proposals p
      join users u on u.id = p.student_id
-     left join users r on r.id = p.reviewer_id
-     left join proposal_evaluations pe on pe.proposal_id = p.id
+     
      left join users ev on ev.id = pe.evaluator_id
      order by p.updated_at desc
      limit 200`
@@ -616,73 +531,8 @@ app.get('/api/proposals', requireAuth, asyncRoute(async (req, res) => {
       status: row.status,
       updated_at: row.updated_at,
       student: row.student,
-      reviewer: row.reviewer,
-      evaluation: mapEvaluation(row),
+      
     })),
-  });
-}));
-
-app.get('/api/proposals/similarity-report', requireAuth, requireRole(['admin']), asyncRoute(async (_req, res) => {
-  const result = await query(
-    `select
-       p.id, p.title, p.domain, p.status, p.abstract, p.problem, p.objectives, p.methodology, p.tech_stack,
-       u.name as student
-     from proposals p
-     join users u on u.id = p.student_id
-     order by p.updated_at desc
-     limit 200`
-  );
-
-  const proposals = result.rows;
-  const allPairs = [];
-
-  for (let index = 0; index < proposals.length; index += 1) {
-    for (let offset = index + 1; offset < proposals.length; offset += 1) {
-      const left = proposals[index];
-      const right = proposals[offset];
-      const pairScore = scoreSimilarityPair(left, right);
-      allPairs.push({
-        id: `${left.id}:${right.id}`,
-        similarityScore: pairScore.scorePercent,
-        riskLevel: pairScore.riskLevel,
-        overlappingTerms: pairScore.overlappingTerms,
-        sections: pairScore.sections,
-        left: {
-          id: left.id,
-          title: left.title,
-          student: left.student,
-          domain: left.domain,
-          status: left.status,
-        },
-        right: {
-          id: right.id,
-          title: right.title,
-          student: right.student,
-          domain: right.domain,
-          status: right.status,
-        },
-      });
-    }
-  }
-
-  const flaggedPairs = allPairs
-    .filter((pair) => pair.similarityScore >= 18)
-    .sort((left, right) => right.similarityScore - left.similarityScore)
-    .slice(0, 20);
-
-  const averageSimilarity = allPairs.length
-    ? Number((allPairs.reduce((sum, pair) => sum + pair.similarityScore, 0) / allPairs.length).toFixed(1))
-    : 0;
-
-  return res.json({
-    item: {
-      generatedAt: new Date().toISOString(),
-      totalProposals: proposals.length,
-      comparedPairs: allPairs.length,
-      flaggedPairs: flaggedPairs.length,
-      averageSimilarity,
-      pairs: flaggedPairs,
-    },
   });
 }));
 
@@ -707,8 +557,7 @@ app.get('/api/proposals/:id', requireAuth, asyncRoute(async (req, res) => {
        pe.updated_at as evaluation_updated_at
      from proposals p
      join users u on u.id = p.student_id
-     left join users r on r.id = p.reviewer_id
-     left join proposal_evaluations pe on pe.proposal_id = p.id
+     
      left join users ev on ev.id = pe.evaluator_id
      where p.id = $1`,
     [id]
@@ -806,25 +655,21 @@ const proposalUpdateStatusSchema = z.object({
   reviewerId: z.string().uuid().optional().nullable(),
 });
 
-app.patch('/api/proposals/:id/status', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
+app.patch('/api/proposals/:id/status', requireAuth, asyncRoute(async (req, res) => {
   const id = req.params.id;
-  const parsed = proposalUpdateStatusSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-  const { status, reviewerId } = parsed.data;
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'Status is required' });
 
-  const updateResult = await query(
-    `update proposals
-     set status = $2,
-         reviewer_id = coalesce($3, reviewer_id)
-     where id = $1
-     returning id`,
-    [id, status, reviewerId ?? null]
-  );
-  if (updateResult.rowCount === 0) return res.status(404).json({ error: 'Proposal not found' });
-  
-  await logActivity(req.user.sub, 'UPDATE_PROPOSAL_STATUS', 'proposal', id, { status: parsed.data.status });
+  // Verify ownership or admin role
+  const check = await query('select student_id from proposals where id = $1', [id]);
+  if (!check.rowCount) return res.status(404).json({ error: 'Not found' });
+  if (req.user.role === 'student' && check.rows[0].student_id !== req.user.sub) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
-  return res.json({ ok: true });
+  await query(`update proposals set status = $2, updated_at = now() where id = $1`, [id, status]);
+  await logActivity(req.user.sub, 'UPDATE_STATUS', 'proposal', id, { status });
+  return res.json({ success: true, status });
 }));
 
 const evaluationCriteriaSchema = z.object({
@@ -836,131 +681,21 @@ const evaluationCriteriaSchema = z.object({
   documentationReadiness: z.number().min(1).max(10),
 });
 
-const evaluationUpsertSchema = z.object({
-  criteria: evaluationCriteriaSchema,
-  recommendation: z.enum(['Approve', 'Revise', 'Reject']),
-  strengths: z.string().min(1),
-  risks: z.string().min(1),
-  summary: z.string().min(1),
-});
 
-const workspaceDeadlineValueSchema = z.union([
-  z.string().datetime({ offset: true }),
-  z.string().datetime(),
-  z.null(),
-]);
-
-const workspaceSettingsSchema = z.object({
-  submissionDeadline: workspaceDeadlineValueSchema.optional(),
-  reviewDeadline: workspaceDeadlineValueSchema.optional(),
-});
-
-app.get('/api/workspace-settings', requireAuth, asyncRoute(async (_req, res) => {
+app.post('/api/users', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password || !role) return res.status(400).json({ error: 'Missing fields' });
+  const hash = await bcrypt.hash(password, 10);
   const result = await query(
-    `select submission_deadline, review_deadline
-     from workspace_settings
-     where id = 'default'`
+    `insert into users (name, email, password_hash, role) values ($1, $2, $3, $4) returning id`,
+    [name, email, hash, role]
   );
-  const row = result.rows[0] || {};
-  return res.json({
-    item: {
-      submissionDeadline: row.submission_deadline || null,
-      reviewDeadline: row.review_deadline || null,
-    },
-  });
+  return res.json({ id: result.rows[0].id });
 }));
 
-app.put('/api/workspace-settings', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const parsed = workspaceSettingsSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-
-  const submissionDeadline = parsed.data.submissionDeadline ?? null;
-  const reviewDeadline = parsed.data.reviewDeadline ?? null;
-
-  await query(
-    `update workspace_settings
-     set submission_deadline = $1,
-         review_deadline = $2
-     where id = 'default'`,
-    [submissionDeadline, reviewDeadline]
-  );
-
-  return res.json({
-    item: {
-      submissionDeadline,
-      reviewDeadline,
-    },
-  });
-}));
-
-app.put('/api/proposals/:id/evaluation', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
-  const id = req.params.id;
-  const parsed = evaluationUpsertSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
-
-  const proposalCheck = await query(
-    `select p.id
-     from proposals p
-     where p.id = $1`,
-    [id]
-  );
-  if (!proposalCheck.rowCount) return res.status(404).json({ error: 'Not found' });
-
-  const { criteria, recommendation, strengths, risks, summary } = parsed.data;
-  const overallScore = Number((
-    criteria.problemClarity * 0.18 +
-    criteria.technicalFeasibility * 0.22 +
-    criteria.methodologyStrength * 0.22 +
-    criteria.innovation * 0.16 +
-    criteria.impact * 0.12 +
-    criteria.documentationReadiness * 0.1
-  ).toFixed(1));
-  const nextStatus =
-    recommendation === 'Approve'
-      ? 'Approved'
-      : recommendation === 'Reject'
-        ? 'Rejected'
-        : 'Revision Requested';
-
-  await query(
-    `insert into proposal_evaluations
-      (proposal_id, evaluator_id, criteria, overall_score, recommendation, strengths, risks, summary)
-     values ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
-     on conflict (proposal_id)
-     do update set
-       evaluator_id = excluded.evaluator_id,
-       criteria = excluded.criteria,
-       overall_score = excluded.overall_score,
-       recommendation = excluded.recommendation,
-       strengths = excluded.strengths,
-       risks = excluded.risks,
-       summary = excluded.summary`,
-    [id, req.user.sub, JSON.stringify(criteria), overallScore, recommendation, strengths, risks, summary]
-  );
-
-  if (nextStatus) {
-    await query(`update proposals set status = $2, reviewer_id = $3 where id = $1`, [id, nextStatus, req.user.sub]);
-  }
-
-  await logActivity(req.user.sub, 'EVALUATE_PROPOSAL', 'proposal', id, { score: overallScore, recommendation });
-
-  const result = await query(
-    `select
-       pe.criteria as evaluation_criteria,
-       pe.overall_score as evaluation_overall_score,
-       pe.recommendation as evaluation_recommendation,
-       pe.strengths as evaluation_strengths,
-       pe.risks as evaluation_risks,
-       pe.summary as evaluation_summary,
-       ev.name as evaluator_name,
-       pe.updated_at as evaluation_updated_at
-     from proposal_evaluations pe
-     join users ev on ev.id = pe.evaluator_id
-     where pe.proposal_id = $1`,
-    [id]
-  );
-
-  return res.json({ item: mapEvaluation(result.rows[0]), status: nextStatus });
+app.delete('/api/users/:id', requireAuth, requireRole(['admin']), asyncRoute(async (req, res) => {
+  await query('delete from users where id = $1', [req.params.id]);
+  return res.json({ success: true });
 }));
 
 app.get('/api/users', requireAuth, requireRole(['admin']), asyncRoute(async (_req, res) => {
@@ -996,7 +731,7 @@ app.post('/api/folders', requireAuth, requireRole(['student']), asyncRoute(async
   if (!name) return res.status(400).json({ error: 'Name is required' });
   
   const result = await query(
-    `insert into folders (name, parent_id, student_id) values ($1, $2, $3) returning *`,
+    `insert into folders (name, parent_id, student_id, color) values ($1, $2, $3) returning *`,
     [name, parent_id || null, req.user.sub]
   );
   return res.status(201).json({ item: result.rows[0] });

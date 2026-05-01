@@ -17,7 +17,6 @@ create table if not exists proposals (
   domain text not null,
   status text not null check (status in ('Pending', 'In Review', 'Approved', 'Revision Requested', 'Rejected')),
   student_id uuid not null unique references users(id) on delete cascade,
-  reviewer_id uuid references users(id) on delete set null,
   abstract text not null,
   problem text not null,
   objectives text[] not null default '{}',
@@ -31,35 +30,14 @@ create table if not exists proposals (
 create index if not exists proposals_student_id_idx on proposals(student_id);
 create index if not exists proposals_status_idx on proposals(status);
 
-create table if not exists proposal_evaluations (
-  id uuid primary key default uuid_generate_v4(),
-  proposal_id uuid not null unique references proposals(id) on delete cascade,
-  evaluator_id uuid not null references users(id) on delete cascade,
-  criteria jsonb not null,
-  overall_score numeric(4,1) not null,
-  recommendation text not null check (recommendation in ('Approve', 'Revise', 'Reject')),
-  strengths text not null,
-  risks text not null,
-  summary text not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
 
-create index if not exists proposal_evaluations_evaluator_id_idx on proposal_evaluations(evaluator_id);
-
-create table if not exists workspace_settings (
-  id text primary key,
-  submission_deadline timestamptz,
-  review_deadline timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
 
 create table if not exists folders (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   parent_id uuid references folders(id) on delete cascade,
   student_id uuid not null references users(id) on delete cascade,
+  color text default '#64748b',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -93,9 +71,7 @@ create table if not exists activity_logs (
 
 create index if not exists activity_logs_created_at_idx on activity_logs(created_at desc);
 
-insert into workspace_settings (id)
-values ('default')
-on conflict (id) do nothing;
+
 
 create or replace function set_updated_at()
 returns trigger as $$

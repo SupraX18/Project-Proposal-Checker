@@ -76,6 +76,7 @@ export type Folder = {
   name: string;
   parent_id: string | null;
   student_id: string;
+  color: string;
   created_at: string;
   updated_at: string;
 };
@@ -89,29 +90,7 @@ export type ActivityLog = {
   details: any;
   created_at: string;
 };
-export type EvaluationScores = {
-  problemClarity: number;
-  technicalFeasibility: number;
-  methodologyStrength: number;
-  innovation: number;
-  impact: number;
-  documentationReadiness: number;
-};
-export type ProposalEvaluation = {
-  criteria: EvaluationScores;
-  overallScore: number;
-  recommendation: EvaluationRecommendation;
-  strengths: string;
-  risks: string;
-  summary: string;
-  evaluatorName: string;
-  evaluatedAt: string;
-};
 
-export type WorkspaceSettings = {
-  submissionDeadline: string | null;
-  reviewDeadline: string | null;
-};
 
 export type SimilarityPair = {
   id: string;
@@ -135,14 +114,6 @@ export type SimilarityPair = {
   };
 };
 
-export type SimilarityReport = {
-  generatedAt: string;
-  totalProposals: number;
-  comparedPairs: number;
-  flaggedPairs: number;
-  averageSimilarity: number;
-  pairs: SimilarityPair[];
-};
 
 export async function login(email: string, password: string) {
   return apiFetch<{ token: string; user: AuthUser }>(`/api/auth/login`, {
@@ -167,9 +138,7 @@ export type ProposalListItem = {
   status: ProposalStatus;
   updated_at: string;
   student: string;
-  reviewer: string | null;
-  evaluation: ProposalEvaluation | null;
-};
+    };
 
 export async function listProposals() {
   return apiFetch<{ items: ProposalListItem[] }>(`/api/proposals`);
@@ -189,12 +158,18 @@ export type ProposalDetailsItem = {
   created_at: string;
   updated_at: string;
   student: string;
-  reviewer: string | null;
-  evaluation: ProposalEvaluation | null;
-};
+    };
 
 export async function getProposal(id: string) {
   return apiFetch<{ item: ProposalDetailsItem }>(`/api/proposals/${id}`);
+}
+
+
+export async function updateProposalStatus(id: string, status: ProposalStatus): Promise<{ success: boolean; status: ProposalStatus }> {
+  return request<{ success: boolean; status: ProposalStatus }>(`/proposals/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
 }
 
 export async function createProposal(payload: {
@@ -262,44 +237,27 @@ export async function downloadDocument(id: string) {
   };
 }
 
-export async function updateProposalStatus(id: string, payload: { status: ProposalListItem['status']; reviewerId?: string | null }) {
-  return apiFetch<{ ok: true }>(`/api/proposals/${id}/status`, { method: 'PATCH', body: JSON.stringify(payload) });
+
+
+
+
+export async function createUser(data: Partial<AuthUser> & { password?: string }): Promise<{ id: string }> {
+  return request<{ id: string }>("/users", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
-export async function saveProposalEvaluation(
-  id: string,
-  payload: {
-    criteria: EvaluationScores;
-    recommendation: EvaluationRecommendation;
-    strengths: string;
-    risks: string;
-    summary: string;
-  }
-) {
-  return apiFetch<{ item: ProposalEvaluation; status: ProposalStatus }>(`/api/proposals/${id}/evaluation`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
+export async function deleteUser(id: string): Promise<void> {
+  return request<void>(`/users/${id}`, { method: "DELETE" });
 }
 
 export async function listUsers() {
   return apiFetch<{ items: UserDirectoryItem[] }>(`/api/users`);
 }
 
-export async function getWorkspaceSettings() {
-  return apiFetch<{ item: WorkspaceSettings }>(`/api/workspace-settings`);
-}
 
-export async function updateWorkspaceSettings(payload: WorkspaceSettings) {
-  return apiFetch<{ item: WorkspaceSettings }>(`/api/workspace-settings`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-}
 
-export async function getSimilarityReport() {
-  return apiFetch<{ item: SimilarityReport }>(`/api/proposals/similarity-report`);
-}
 
 export async function listFolders() {
   return apiFetch<{ items: Folder[] }>(`/api/folders`);
