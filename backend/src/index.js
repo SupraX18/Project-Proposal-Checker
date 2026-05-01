@@ -348,6 +348,10 @@ async function getProposalAccessRow(proposalId) {
 }
 
 function canAccessProposal(user, proposalRow) {
+  return user.role === 'admin' || user.role === 'reviewer' || proposalRow.student_id === user.sub;
+}
+
+function canEditProposal(user, proposalRow) {
   return user.role === 'admin' || proposalRow.student_id === user.sub;
 }
 
@@ -387,7 +391,7 @@ const registerSchema = z.object({
 });
 
 const createUserSchema = registerSchema.extend({
-  role: z.enum(['student', 'admin']).default('student'),
+  role: z.enum(['student', 'reviewer', 'admin']).default('student'),
 });
 
 const proposalPayloadSchema = z.object({
@@ -520,7 +524,7 @@ app.get(
     const params = [];
     let whereClause = '';
 
-    if (req.user.role === 'student') {
+    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
       params.push(req.user.sub);
       whereClause = `where p.student_id = $${params.length}`;
     }
@@ -727,7 +731,7 @@ app.put(
 
     const proposalRow = await getProposalAccessRow(req.params.id);
     if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
-    if (!canAccessProposal(req.user, proposalRow)) {
+    if (!canEditProposal(req.user, proposalRow)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -786,7 +790,7 @@ app.patch(
     }
 
     const previousStatus = normalizeProposalStatus(proposalRow.status) || proposalRow.status;
-    const reviewerId = req.user.role === 'admin' ? req.user.sub : null;
+    const reviewerId = (req.user.role === 'admin' || req.user.role === 'reviewer') ? req.user.sub : null;
     await query(
       `update proposals
        set status = $2,
@@ -856,7 +860,7 @@ app.get(
     const params = [];
     const filters = [];
 
-    if (req.user.role === 'student') {
+    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
       params.push(req.user.sub);
       filters.push(`p.student_id = $${params.length}`);
     }
@@ -892,7 +896,7 @@ app.post(
 
     const proposalRow = await getProposalAccessRow(parsed.data.proposalId);
     if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
-    if (!canAccessProposal(req.user, proposalRow)) {
+    if (!canEditProposal(req.user, proposalRow)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -967,7 +971,7 @@ app.get(
     const params = [];
     const filters = [];
 
-    if (req.user.role === 'student') {
+    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
       params.push(req.user.sub);
       filters.push(`p.student_id = $${params.length}`);
     }
@@ -1016,7 +1020,7 @@ app.post(
 
     const proposalRow = await getProposalAccessRow(proposalId);
     if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
-    if (!canAccessProposal(req.user, proposalRow)) {
+    if (!canEditProposal(req.user, proposalRow)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -1128,7 +1132,7 @@ app.get(
     );
     const document = result.rows[0];
     if (!document) return res.status(404).json({ error: 'Document not found' });
-    if (req.user.role !== 'admin' && document.student_id !== req.user.sub) {
+    if (req.user.role !== 'admin' && req.user.role !== 'reviewer' && document.student_id !== req.user.sub) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 

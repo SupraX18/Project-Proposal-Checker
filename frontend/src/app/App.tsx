@@ -201,12 +201,12 @@ export default function App() {
       note: workspace.item.reviewNotes || '',
     });
 
-    if (currentUser?.role === 'student') {
+    if (currentUser?.role !== 'admin' && currentUser?.role !== 'reviewer') {
       setProposalForm(proposalToForm(workspace.item));
     }
   }, [workspace?.item?.id, workspace?.item?.status, workspace?.item?.reviewNotes, currentUser?.role]);
 
-  const personalProposal = currentUser?.role === 'student' ? proposals[0] ?? null : null;
+  const personalProposal = currentUser?.role !== 'admin' && currentUser?.role !== 'reviewer' ? proposals[0] ?? null : null;
   const filteredProposals = useMemo(() => {
     const search = deferredQuery.trim().toLowerCase();
     if (!search) return proposals;
@@ -258,14 +258,24 @@ export default function App() {
     setDataLoading(true);
     try {
       if (user.role === 'admin') {
-        const [proposalResponse, userResponse, logResponse] = await Promise.all([
+        const [proposalResponse, userResponse, logResponse] = await Promise.allSettled([
           listProposals(),
           listUsers(),
           listLogs(120),
         ]);
+        const pResult = proposalResponse.status === 'fulfilled' ? proposalResponse.value : { items: [] };
+        const uResult = userResponse.status === 'fulfilled' ? userResponse.value : { items: [] };
+        const lResult = logResponse.status === 'fulfilled' ? logResponse.value : { items: [] };
+        setProposals(pResult.items);
+        setUsers(uResult.items);
+        setLogs(lResult.items);
+        setSelectedProposalId((current) => {
+          if (current && pResult.items.some((item) => item.id === current)) return current;
+          return pResult.items[0]?.id ?? null;
+        });
+      } else if (user.role === 'reviewer') {
+        const proposalResponse = await listProposals();
         setProposals(proposalResponse.items);
-        setUsers(userResponse.items);
-        setLogs(logResponse.items);
         setSelectedProposalId((current) => {
           if (current && proposalResponse.items.some((item) => item.id === current)) return current;
           return proposalResponse.items[0]?.id ?? null;
@@ -739,7 +749,7 @@ export default function App() {
           </div>
 
           <div className="topbar-actions">
-            {view === 'dashboard' || (view === 'workspace' && currentUser.role === 'admin') ? (
+            {view === 'dashboard' || (view === 'workspace' && (currentUser.role === 'admin' || currentUser.role === 'reviewer')) ? (
               <label className="search-field">
                 <Search size={16} />
                 <input
@@ -874,7 +884,7 @@ function DashboardView({
         </SectionCard>
       ) : null}
 
-      {currentUser.role === 'student' ? (
+      {currentUser.role !== 'admin' && currentUser.role !== 'reviewer' ? (
         <>
           <SectionCard
             title="My proposal board"
@@ -1022,8 +1032,10 @@ function WorkspaceView({
   onDeleteProposal: () => Promise<void>;
 }) {
   const canDelete = currentUser.role === 'admin';
+  const canEdit = currentUser.role === 'admin' || currentUser.role === 'student';
+  const isReviewer = currentUser.role === 'reviewer';
 
-  if (currentUser.role === 'admin' && proposals.length) {
+  if ((currentUser.role === 'admin' || currentUser.role === 'reviewer') && proposals.length) {
     const querySummary = query.trim() ? `${proposals.length} project match${proposals.length === 1 ? '' : 'es'}` : `${proposals.length} project${proposals.length === 1 ? '' : 's'}`;
     return (
       <div className="page-grid">
@@ -1076,7 +1088,7 @@ function WorkspaceView({
     );
   }
 
-  if (currentUser.role === 'student' && !workspace && !workspaceLoading) {
+  if (currentUser.role !== 'admin' && currentUser.role !== 'reviewer' && !workspace && !workspaceLoading) {
     return (
       <div className="page-grid">
         <SectionCard
@@ -1229,89 +1241,146 @@ function WorkspaceDetailPanel({
       </SectionCard>
 
       <div className="workspace-grid">
-        <SectionCard title="Status tracking" description="Save review progress, approval, rejection, or requested changes.">
-          <form className="stack-form" onSubmit={onSaveStatus}>
-            <label>
-              Status
-              <select
-                value={statusForm.status}
-                onChange={(event) =>
-                  onStatusFormChange({
-                    ...statusForm,
-                    status: event.target.value as ProposalStatus,
-                  })
-                }
-              >
-                {proposalStatusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Tracking note
-              <textarea
-                value={statusForm.note}
-                onChange={(event) =>
-                  onStatusFormChange({
-                    ...statusForm,
-                    note: event.target.value,
-                  })
-                }
-                placeholder="Add approval notes, rejection reasons, or review updates."
-                rows={5}
-              />
-            </label>
-            <button className="primary-button" type="submit" disabled={actionLoading}>
-              {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
-              Save tracking status
-            </button>
-          </form>
-        </SectionCard>
+        {(currentUser.role === 'admin' || currentUser.role === 'reviewer') ? (
+          <SectionCard title="Status tracking" description="Save review progress, approval, rejection, or requested changes.">
+            <form className="stack-form" onSubmit={onSaveStatus}>
+              <label>
+                Status
+                <select
+                  value={statusForm.status}
+                  onChange={(event) =>
+                    onStatusFormChange({
+                      ...statusForm,
+                      status: event.target.value as ProposalStatus,
+                    })
+                  }
+                >
+                  {proposalStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Tracking note
+                <textarea
+                  value={statusForm.note}
+                  onChange={(event) =>
+                    onStatusFormChange({
+                      ...statusForm,
+                      note: event.target.value,
+                    })
+                  }
+                  placeholder="Add approval notes, rejection reasons, or review updates."
+                  rows={5}
+                />
+              </label>
+              <button className="primary-button" type="submit" disabled={actionLoading}>
+                {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
+                Save tracking status
+              </button>
+            </form>
+          </SectionCard>
+        ) : (
+          <SectionCard title="Status tracking" description="Your proposal status is managed by reviewers and admins.">
+            <form className="stack-form" onSubmit={onSaveStatus}>
+              <label>
+                Status
+                <select
+                  value={statusForm.status}
+                  onChange={(event) =>
+                    onStatusFormChange({
+                      ...statusForm,
+                      status: event.target.value as ProposalStatus,
+                    })
+                  }
+                >
+                  {proposalStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Tracking note
+                <textarea
+                  value={statusForm.note}
+                  onChange={(event) =>
+                    onStatusFormChange({
+                      ...statusForm,
+                      note: event.target.value,
+                    })
+                  }
+                  placeholder="Add approval notes, rejection reasons, or review updates."
+                  rows={5}
+                />
+              </label>
+              <button className="primary-button" type="submit" disabled={actionLoading}>
+                {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
+                Save tracking status
+              </button>
+            </form>
+          </SectionCard>
+        )}
 
-        <SectionCard title="Folder structure" description="Create parent folders and subfolders with a scheme name.">
-          <form className="stack-form" onSubmit={onCreateFolder}>
-            <label>
-              Folder name
-              <input
-                value={folderForm.name}
-                onChange={(event) => onFolderFormChange({ ...folderForm, name: event.target.value })}
-                placeholder="Example: Main submission pack"
-                required
+        {(currentUser.role === 'admin' || currentUser.role === 'student') ? (
+          <SectionCard title="Folder structure" description="Create parent folders and subfolders with a scheme name.">
+            <form className="stack-form" onSubmit={onCreateFolder}>
+              <label>
+                Folder name
+                <input
+                  value={folderForm.name}
+                  onChange={(event) => onFolderFormChange({ ...folderForm, name: event.target.value })}
+                  placeholder="Example: Main submission pack"
+                  required
+                />
+              </label>
+              <label>
+                Scheme
+                <input
+                  value={folderForm.scheme}
+                  onChange={(event) => onFolderFormChange({ ...folderForm, scheme: event.target.value })}
+                  placeholder="Example: Internal review"
+                />
+              </label>
+              <label>
+                Parent folder
+                <select
+                  value={folderForm.parentId}
+                  onChange={(event) => onFolderFormChange({ ...folderForm, parentId: event.target.value })}
+                >
+                  <option value="">Create as parent folder</option>
+                  {folderOptions.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="secondary-button" type="submit" disabled={actionLoading}>
+                <FolderPlus size={16} />
+                Create folder
+              </button>
+            </form>
+          </SectionCard>
+        ) : (
+          <SectionCard title="Folder structure" description="You can view the folder tree but only students and admins can create folders.">
+            {!folderTree.length ? (
+              <EmptyState
+                icon={<FolderTree size={18} />}
+                title="No folders created yet"
+                description="Students and admins can create folders for this project."
               />
-            </label>
-            <label>
-              Scheme
-              <input
-                value={folderForm.scheme}
-                onChange={(event) => onFolderFormChange({ ...folderForm, scheme: event.target.value })}
-                placeholder="Example: Internal review"
-              />
-            </label>
-            <label>
-              Parent folder
-              <select
-                value={folderForm.parentId}
-                onChange={(event) => onFolderFormChange({ ...folderForm, parentId: event.target.value })}
-              >
-                <option value="">Create as parent folder</option>
-                {folderOptions.map((folder) => (
-                  <option key={folder.id} value={folder.id}>
-                    {folder.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button className="secondary-button" type="submit" disabled={actionLoading}>
-              <FolderPlus size={16} />
-              Create folder
-            </button>
-          </form>
-        </SectionCard>
+            ) : (
+              <FolderTreeView nodes={folderTree} canDelete={false} onDelete={onDeleteFolder} />
+            )}
+          </SectionCard>
+        )}
       </div>
 
-      {currentUser.role === 'student' ? (
+      {currentUser.role !== 'admin' && currentUser.role !== 'reviewer' ? (
         <SectionCard title="Project details" description="Edit your one project proposal and keep the tracking information fresh.">
           <ProjectForm
             currentUser={currentUser}
@@ -1325,56 +1394,58 @@ function WorkspaceDetailPanel({
       ) : null}
 
       <div className="workspace-grid">
-        <SectionCard title="Upload related material" description="Save multiple supporting documents under the project and folder structure.">
-          <div className="stack-form">
-            <label>
-              Folder destination
-              <select
-                value={uploadForm.folderId}
-                onChange={(event) => onUploadFormChange({ ...uploadForm, folderId: event.target.value })}
-              >
-                <option value="">No folder</option>
-                {folderOptions.map((folder) => (
-                  <option key={folder.id} value={folder.id}>
-                    {folder.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Category
-              <input
-                value={uploadForm.category}
-                onChange={(event) => onUploadFormChange({ ...uploadForm, category: event.target.value })}
-                placeholder="supporting-document"
-              />
-            </label>
-            <label>
-              Description
-              <textarea
-                value={uploadForm.description}
-                onChange={(event) => onUploadFormChange({ ...uploadForm, description: event.target.value })}
-                placeholder="Optional note for the uploaded files."
-                rows={4}
-              />
-            </label>
-            <label className="upload-dropzone">
-              <Upload size={18} />
-              <div>
-                <strong>Choose one or more files</strong>
-                <span>PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, PNG, JPG, TXT, ZIP</span>
-              </div>
-              <input type="file" multiple onChange={onUploadFiles} />
-            </label>
-          </div>
-        </SectionCard>
+        {(currentUser.role === 'admin' || currentUser.role === 'student') ? (
+          <SectionCard title="Upload related material" description="Save multiple supporting documents under the project and folder structure.">
+            <div className="stack-form">
+              <label>
+                Folder destination
+                <select
+                  value={uploadForm.folderId}
+                  onChange={(event) => onUploadFormChange({ ...uploadForm, folderId: event.target.value })}
+                >
+                  <option value="">No folder</option>
+                  {folderOptions.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Category
+                <input
+                  value={uploadForm.category}
+                  onChange={(event) => onUploadFormChange({ ...uploadForm, category: event.target.value })}
+                  placeholder="supporting-document"
+                />
+              </label>
+              <label>
+                Description
+                <textarea
+                  value={uploadForm.description}
+                  onChange={(event) => onUploadFormChange({ ...uploadForm, description: event.target.value })}
+                  placeholder="Optional note for the uploaded files."
+                  rows={4}
+                />
+              </label>
+              <label className="upload-dropzone">
+                <Upload size={18} />
+                <div>
+                  <strong>Choose one or more files</strong>
+                  <span>PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, PNG, JPG, TXT, ZIP</span>
+                </div>
+                <input type="file" multiple onChange={onUploadFiles} />
+              </label>
+            </div>
+          </SectionCard>
+        ) : null}
 
         <SectionCard title="Folder tree" description="Systematic parent and child folders for this project.">
           {!folderTree.length ? (
             <EmptyState
               icon={<FolderTree size={18} />}
               title="No folders created yet"
-              description="Create a parent folder or a subfolder to organize project material."
+              description={currentUser.role === 'reviewer' ? 'Students and admins can create folders.' : 'Create a parent folder or a subfolder to organize project material.'}
             />
           ) : (
             <FolderTreeView nodes={folderTree} canDelete={canDelete} onDelete={onDeleteFolder} />
@@ -1461,6 +1532,7 @@ function UsersView({
               onChange={(event) => onFormChange({ ...newUserForm, role: event.target.value as Role })}
             >
               <option value="student">User</option>
+              <option value="reviewer">Reviewer</option>
               <option value="admin">Admin</option>
             </select>
           </label>
@@ -1983,11 +2055,17 @@ function formToProposalPayload(form: ProposalFormState, currentUser: AuthUser): 
 }
 
 function roleLabel(role: Role) {
-  return role === 'admin' ? 'Admin' : 'User';
+  if (role === 'admin') return 'Admin';
+  if (role === 'reviewer') return 'Reviewer';
+  return 'User';
 }
 
 function viewTitle(view: View, role: Role) {
-  if (view === 'dashboard') return role === 'admin' ? 'Admin Dashboard' : 'My Tracking Board';
+  if (view === 'dashboard') {
+    if (role === 'admin') return 'Admin Dashboard';
+    if (role === 'reviewer') return 'Reviewer Dashboard';
+    return 'My Tracking Board';
+  }
   if (view === 'workspace') return 'Project Workspace';
   if (view === 'users') return 'User Management';
   return 'Activity Logs';

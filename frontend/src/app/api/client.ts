@@ -68,7 +68,7 @@ export async function apiFetch<T>(
   return (await response.json()) as T;
 }
 
-export type Role = 'student' | 'admin';
+export type Role = 'student' | 'reviewer' | 'admin';
 
 export type AuthUser = {
   id: string;
