@@ -388,6 +388,7 @@ const registerSchema = z.object({
   name: z.string().trim().min(1),
   email: z.string().trim().email(),
   password: z.string().min(6),
+  role: z.enum(['student', 'admin']).default('student'),
 });
 
 const createUserSchema = registerSchema.extend({
@@ -443,20 +444,20 @@ app.post(
       return res.status(400).json({ error: 'Invalid registration payload' });
     }
 
-    const { name, email, password } = parsed.data;
+    const { name, email, password, role } = parsed.data;
     const passwordHash = await bcrypt.hash(password, 10);
 
     try {
       const result = await query(
         `insert into users (name, email, password_hash, role)
-         values ($1, $2, $3, 'student')
+         values ($1, $2, $3, $4)
          returning id, name, email, role, created_at`,
-        [name, normalizeEmail(email), passwordHash],
+        [name, normalizeEmail(email), passwordHash, role],
       );
 
       const user = mapUser(result.rows[0]);
       const token = signToken(user);
-      await logActivity(user.id, 'REGISTER', 'user', user.id, { email: user.email });
+      await logActivity(user.id, 'REGISTER', 'user', user.id, { email: user.email, role: user.role });
       return res.status(201).json({ token, user });
     } catch (error) {
       if (String(error?.message || '').includes('users_email_key')) {
@@ -474,6 +475,7 @@ app.post(
       .object({
         email: z.string().trim().email(),
         password: z.string().min(1),
+        role: z.enum(['student', 'admin']).optional(),
       })
       .safeParse(req.body);
 
@@ -481,7 +483,7 @@ app.post(
       return res.status(400).json({ error: 'Invalid login payload' });
     }
 
-    const { email, password } = parsed.data;
+    const { email, password, role } = parsed.data;
     const result = await query(
       `select id, name, email, role, password_hash, created_at
        from users
@@ -493,6 +495,9 @@ app.post(
 
     const passwordMatches = await bcrypt.compare(password, row.password_hash);
     if (!passwordMatches) return res.status(401).json({ error: 'Invalid credentials' });
+    if (role && row.role !== role) {
+      return res.status(401).json({ error: 'Selected role does not match this account.' });
+    }
 
     const user = mapUser(row);
     const token = signToken(user);

@@ -195,18 +195,18 @@ export type ProposalPayload = {
   team: TeamMember[];
 };
 
-export async function login(email: string, password: string) {
+export async function login(email: string, password: string, role: Role) {
   return apiFetch<{ token: string; user: AuthUser }>('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, role: role === 'admin' ? 'admin' : 'student' }),
     auth: false,
   });
 }
 
-export async function register(name: string, email: string, password: string) {
+export async function register(name: string, email: string, password: string, role: Role) {
   return apiFetch<{ token: string; user: AuthUser }>('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, email, password, role: role === 'admin' ? 'admin' : 'student' }),
     auth: false,
   });
 }

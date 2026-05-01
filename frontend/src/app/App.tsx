@@ -12,7 +12,6 @@ import {
   LogOut,
   Menu,
   Search,
-  Shield,
   Trash2,
   Upload,
   UserCog,
@@ -114,6 +113,7 @@ const initialUploadForm = {
 
 export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [authRole, setAuthRole] = useState<Role>('student');
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
@@ -313,12 +313,12 @@ export default function App() {
     setActionLoading(true);
     try {
       if (authMode === 'login') {
-        const { token, user } = await login(email, password);
+        const { token, user } = await login(email, password, authRole);
         setAuthToken(token);
         setCurrentUser(user);
         showToast('success', 'Signed in successfully.');
       } else {
-        const { token, user } = await register(name, email, password);
+        const { token, user } = await register(name, email, password, authRole);
         setAuthToken(token);
         setCurrentUser(user);
         showToast('success', 'Account created successfully.');
@@ -557,40 +557,64 @@ export default function App() {
         {toast ? <ToastView toast={toast} /> : null}
         <div className="auth-shell">
           <section className="auth-hero">
-            <BrandLogo />
-            <div className="auth-hero-copy">
-              <p className="eyebrow">Project Proposal Checker</p>
-              <h1>Track proposals, folders, and supporting documents in one place.</h1>
-              <p>
-                The login flow stays simple, while the rest of the application now focuses on
-                proposal tracking, document organization, and clear review updates.
-              </p>
+            <div className="auth-hero-brand">
+              <div className="auth-hero-mark">
+                <ProjectLogoMark size={52} />
+              </div>
+              <h1>Project Proposal Checker</h1>
             </div>
-            <div className="hero-points">
-              <article>
-                <Workflow size={18} />
-                <strong>Status Tracking</strong>
-                <span>Submitted, under review, approved, rejected, and changes requested.</span>
-              </article>
-              <article>
-                <FolderTree size={18} />
-                <strong>Nested Folders</strong>
-                <span>Parent folders, subfolders, and scheme-based organization.</span>
-              </article>
-              <article>
-                <Shield size={18} />
-                <strong>Controlled Access</strong>
-                <span>Admin manages users and deletions. Users handle project work.</span>
-              </article>
+            <div className="hero-keywords">
+              <span>Proposal Tracking</span>
+              <span>Folder Management</span>
+              <span>Document Review</span>
+              <span>Status Updates</span>
             </div>
           </section>
 
           <section className="auth-card">
+            <div className="auth-top-switches">
+              <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+                <button
+                  className={authMode === 'login' ? 'switch-button active' : 'switch-button'}
+                  type="button"
+                  onClick={() => setAuthMode('login')}
+                >
+                  Login
+                </button>
+                <button
+                  className={authMode === 'register' ? 'switch-button active' : 'switch-button'}
+                  type="button"
+                  onClick={() => setAuthMode('register')}
+                >
+                  Register
+                </button>
+              </div>
+              <div className="auth-role-switch" role="tablist" aria-label="Role">
+                <button
+                  className={authRole === 'student' ? 'switch-button active' : 'switch-button'}
+                  type="button"
+                  onClick={() => setAuthRole('student')}
+                >
+                  User
+                </button>
+                <button
+                  className={authRole === 'admin' ? 'switch-button active' : 'switch-button'}
+                  type="button"
+                  onClick={() => setAuthRole('admin')}
+                >
+                  Admin
+                </button>
+              </div>
+            </div>
             <div className="auth-card-header">
               <ProjectLogoMark size={44} />
               <div>
-                <h2>{authMode === 'login' ? 'Welcome back' : 'Create account'}</h2>
-                <p>{authMode === 'login' ? 'Sign in to continue tracking.' : 'Register as a user.'}</p>
+                <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'User'} login` : `${authRole === 'admin' ? 'Admin' : 'User'} register`}</h2>
+                <p>
+                  {authMode === 'login'
+                    ? `Sign in as ${authRole === 'admin' ? 'admin' : 'user'}.`
+                    : `Create a ${authRole === 'admin' ? 'admin' : 'user'} account.`}
+                </p>
               </div>
             </div>
 
@@ -628,15 +652,11 @@ export default function App() {
               </button>
             </form>
 
-            <button
-              className="secondary-button auth-toggle"
-              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-              type="button"
-            >
+            <div className="auth-helper-text">
               {authMode === 'login'
-                ? 'Need an account? Register'
-                : 'Already have an account? Sign in'}
-            </button>
+                ? 'Use the switch above if you need to create an account.'
+                : 'Use the switch above if you already have an account.'}
+            </div>
           </section>
         </div>
       </div>
