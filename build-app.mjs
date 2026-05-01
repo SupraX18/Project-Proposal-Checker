@@ -1,4 +1,13 @@
+import fs from 'fs';
+import path from 'path';
 
+const oldApp = fs.readFileSync('old-app.tsx', 'utf8');
+
+// Extract the utility components from the bottom of old-app.tsx
+const componentsStartIndex = oldApp.indexOf('function StatCard({');
+const componentsCode = oldApp.slice(componentsStartIndex);
+
+const newAppCode = `
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Bell, CheckCircle2, Clock3, FileText, LayoutDashboard, Menu, Moon, LogOut,
@@ -159,7 +168,7 @@ export default function App() {
     try {
       await createProposal({
         ...proposalForm,
-        objectives: proposalForm.objectives.split("\n").filter(Boolean),
+        objectives: proposalForm.objectives.split("\\n").filter(Boolean),
         techStack: proposalForm.techStack.split(",").map((s) => s.trim()).filter(Boolean),
         team: [{ name: currentUser?.name || "", role: "Student" }],
       });
@@ -198,7 +207,7 @@ export default function App() {
     <div className="app-container">
       {toast && <ToastView toast={toast} />}
       
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      <aside className={\`sidebar \${sidebarOpen ? "open" : ""}\`}>
         <div className="sidebar-header">
           <ProjectLogoMark size={32} />
           <div className="brand-text"><strong>Tracker</strong><span>v2.0</span></div>
@@ -356,7 +365,7 @@ export default function App() {
                               <div className="item-main">
                                 <div className="item-text"><strong>{p.title}</strong><span>{p.student} - {p.domain}</span></div>
                               </div>
-                              <div className="item-actions"><span className={`status-chip ${p.status.toLowerCase().replace(" ", "-")}`}>{p.status}</span></div>
+                              <div className="item-actions"><span className={\`status-chip \${p.status.toLowerCase().replace(" ", "-")}\`}>{p.status}</span></div>
                             </div>
                           ))}
                         </div>
@@ -434,283 +443,7 @@ export default function App() {
   );
 }
 
-function StatCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <article className="stat-card">
-      <div className="stat-icon">{icon}</div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
+${componentsCode}`;
 
-function DeadlineCard({
-  title,
-  description,
-  state,
-}: {
-  title: string;
-  description: string;
-  state: DeadlineState;
-}) {
-  return (
-    <article
-      className={`deadline-card ${state.tone}`}
-      title={`${title}: ${state.timestampLabel} • ${description}`}
-    >
-      <span className="deadline-card-label">{title}</span>
-      <strong>{state.countdownLabel}</strong>
-    </article>
-  );
-}
-
-function AppLoadingScreen() {
-  return (
-    <div className="loading-screen">
-      <div className="loading-orb" aria-hidden="true">
-        <div className="loading-orb-ring loading-orb-ring-one" />
-        <div className="loading-orb-ring loading-orb-ring-two" />
-        <div className="loading-orb-core">
-          <ProjectLogoMark className="loading-logo-mark" />
-        </div>
-      </div>
-      <div className="loading-copy">
-        <div className="loading-badge">Project Proposal Checker</div>
-        <h1>Preparing your workspace</h1>
-        <p>Loading dashboards, proposal tools, and evaluation flow.</p>
-      </div>
-      <div className="loading-progress" aria-hidden="true">
-        <span />
-      </div>
-    </div>
-  );
-}
-
-function FuturisticHistogramChart({
-  title,
-  data,
-  xKey,
-  barKey,
-  lineKey,
-  labelKey,
-  barLabel,
-  lineLabel,
-  valueFormatter,
-  yDomain,
-  lineDomain,
-  emptyMessage,
-}: {
-  title: string;
-  data: Array<Record<string, string | number>>;
-  xKey: string;
-  barKey: string;
-  lineKey: string;
-  labelKey: string;
-  barLabel: string;
-  lineLabel: string;
-  valueFormatter: (value: number, key: string) => string;
-  yDomain?: [number, number] | [number, "auto"];
-  lineDomain?: [number, number] | [number, "auto"];
-  emptyMessage?: string;
-}) {
-  const chartId = `histogram-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-  const hasChartData = data.some((item) => Number(item[barKey] ?? 0) > 0 || Number(item[lineKey] ?? 0) > 0);
-
-  if (!data.length || !hasChartData) {
-    return (
-      <article className="chart-card futuristic-chart-card">
-        <div className="panel-title-row">
-          <h3>{title}</h3>
-        </div>
-        <div className="dashboard-chart-frame futuristic-chart-shell">
-          <div className="empty-state chart-empty-state">
-            <BarChart3 size={18} />
-            <span>{emptyMessage ?? "Not enough data to draw this chart yet."}</span>
-          </div>
-        </div>
-      </article>
-    );
-  }
-
-  return (
-    <article className="chart-card futuristic-chart-card">
-      <div className="panel-title-row">
-        <h3>{title}</h3>
-      </div>
-      <div className="dashboard-chart-frame futuristic-chart-shell">
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 16, right: 10, left: -10, bottom: 4 }}>
-            <defs>
-              <linearGradient id={`${chartId}-bars`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#7c3aed" stopOpacity={0.95} />
-                <stop offset="50%" stopColor="#38bdf8" stopOpacity={0.8} />
-                <stop offset="100%" stopColor="#38bdf8" stopOpacity={0.16} />
-              </linearGradient>
-              <linearGradient id={`${chartId}-line`} x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#22d3ee" />
-                <stop offset="100%" stopColor="#c084fc" />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="4 8" vertical={false} stroke="rgba(125, 211, 252, 0.15)" />
-            <XAxis
-              dataKey={xKey}
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: "#64748b", fontSize: 12 }}
-            />
-            <YAxis
-              yAxisId="bars"
-              domain={yDomain}
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: "#64748b", fontSize: 12 }}
-            />
-            {lineDomain && (
-              <YAxis
-                yAxisId="line"
-                orientation="right"
-                domain={lineDomain}
-                tickLine={false}
-                axisLine={false}
-                tick={{ fill: "#94a3b8", fontSize: 12 }}
-              />
-            )}
-            <RechartsTooltip
-              labelFormatter={(_label, payload) =>
-                payload?.[0]?.payload?.[labelKey] ?? payload?.[0]?.payload?.[xKey] ?? ""
-              }
-              formatter={(value: number, name: string) => [
-                valueFormatter(Number(value), name),
-                name === lineKey ? lineLabel : barLabel,
-              ]}
-              contentStyle={{
-                borderRadius: "18px",
-                border: "1px solid rgba(99, 102, 241, 0.12)",
-                background: "rgba(255, 255, 255, 0.96)",
-                color: "#0f172a",
-                boxShadow: "0 24px 60px rgba(99, 102, 241, 0.12)",
-                backdropFilter: "blur(14px)",
-              }}
-              itemStyle={{ color: "#0f172a" }}
-              labelStyle={{ color: "#0f172a", fontWeight: 700 }}
-            />
-            <Bar
-              yAxisId="bars"
-              dataKey={barKey}
-              name={barKey}
-              radius={[14, 14, 2, 2]}
-              fill={`url(#${chartId}-bars)`}
-              stroke="rgba(99, 102, 241, 0.5)"
-              strokeWidth={1.2}
-              background={{ fill: "rgba(148, 163, 184, 0.12)", radius: [14, 14, 2, 2] }}
-              barSize={28}
-            />
-            <Line
-              yAxisId={lineDomain ? "line" : "bars"}
-              type="monotone"
-              dataKey={lineKey}
-              name={lineKey}
-              stroke={`url(#${chartId}-line)`}
-              strokeWidth={3}
-              dot={{ r: 4, strokeWidth: 2, fill: "#ffffff", stroke: "#0ea5e9" }}
-              activeDot={{ r: 6, strokeWidth: 2, fill: "#ffffff", stroke: "#8b5cf6" }}
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-    </article>
-  );
-}
-
-function FuturisticDonutChart({
-  title,
-  data,
-  centerLabel,
-  centerValue,
-  valueFormatter,
-}: {
-  title: string;
-  data: Array<{ name: string; value: number; fill: string }>;
-  centerLabel: string;
-  centerValue: string;
-  valueFormatter: (value: number) => string;
-}) {
-  const hasChartData = data.some((item) => item.value > 0);
-
-  return (
-    <article className="chart-card futuristic-chart-card">
-      <div className="panel-title-row">
-        <h3>{title}</h3>
-      </div>
-      <div className="dashboard-chart-frame futuristic-chart-shell futuristic-donut-shell">
-        {hasChartData ? (
-          <>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data.map((item) => ({ ...item, value: 1 }))}
-                  dataKey="value"
-                  innerRadius={92}
-                  outerRadius={104}
-                  fill="rgba(56, 189, 248, 0.08)"
-                  stroke="none"
-                  isAnimationActive={false}
-                />
-                <Pie
-                  data={data}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={60}
-                  outerRadius={88}
-                  paddingAngle={3}
-                  cornerRadius={10}
-                  stroke="rgba(255, 255, 255, 0.18)"
-                  strokeWidth={2}
-                >
-                  {data.map((entry) => (
-                    <Cell key={entry.name} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <RechartsTooltip
-                  formatter={(value: number, _name, item) => [valueFormatter(Number(value)), item.payload.name]}
-                  contentStyle={{
-                    borderRadius: "18px",
-                    border: "1px solid rgba(99, 102, 241, 0.12)",
-                    background: "rgba(255, 255, 255, 0.96)",
-                    color: "#0f172a",
-                    boxShadow: "0 24px 60px rgba(99, 102, 241, 0.12)",
-                    backdropFilter: "blur(14px)",
-                  }}
-                  itemStyle={{ color: "#0f172a" }}
-                  labelStyle={{ color: "#0f172a", fontWeight: 700 }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="futuristic-center-readout">
-              <strong>{centerValue}</strong>
-              <span>{centerLabel}</span>
-            </div>
-          </>
-        ) : (
-          <div className="empty-state chart-empty-state">
-            <BarChart3 size={18} />
-            <span>Not enough data to draw this chart yet.</span>
-          </div>
-        )}
-      </div>
-      <div className="chart-legend-list">
-        {data.map((item) => (
-          <div key={item.name} className="chart-legend-item">
-            <span className="chart-dot" style={{ backgroundColor: item.fill }} aria-hidden="true" />
-            <span>{item.name}</span>
-            <strong>{valueFormatter(item.value)}</strong>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function ToastView({ toast }: { toast: NonNullable<Toast> }) {
-  return <div className={toast.kind === "success" ? "toast success" : "toast error"}>{toast.text}</div>;
-}
+fs.writeFileSync('frontend/src/app/App.tsx', newAppCode);
+console.log('Successfully generated App.tsx matching old UI perfectly!');
