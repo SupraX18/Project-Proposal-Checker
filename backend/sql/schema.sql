@@ -16,6 +16,8 @@ alter table users alter column role set default 'student';
 do $$
 begin
   alter table users drop constraint if exists users_role_check;
+  -- Normalize any stale/invalid role values before adding the constraint
+  update users set role = 'student' where role not in ('student', 'reviewer', 'admin');
   alter table users add constraint users_role_check check (role in ('student', 'reviewer', 'admin'));
 exception
   when undefined_table then null;
