@@ -348,11 +348,11 @@ async function getProposalAccessRow(proposalId) {
 }
 
 function canAccessProposal(user, proposalRow) {
-  return user.role === 'admin' || user.role === 'reviewer' || proposalRow.student_id === user.sub;
+  return user.role === 'admin' || proposalRow.student_id === user.sub;
 }
 
 function canEditProposal(user, proposalRow) {
-  return user.role === 'admin' || proposalRow.student_id === user.sub;
+  return proposalRow.student_id === user.sub;
 }
 
 app.use(
@@ -392,7 +392,7 @@ const registerSchema = z.object({
 });
 
 const createUserSchema = registerSchema.extend({
-  role: z.enum(['student', 'reviewer', 'admin']).default('student'),
+  role: z.enum(['student', 'admin']).default('student'),
 });
 
 const proposalPayloadSchema = z.object({
@@ -529,7 +529,7 @@ app.get(
     const params = [];
     let whereClause = '';
 
-    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
+    if (req.user.role !== 'admin') {
       params.push(req.user.sub);
       whereClause = `where p.student_id = $${params.length}`;
     }
@@ -790,20 +790,18 @@ app.patch(
 
     const proposalRow = await getProposalAccessRow(req.params.id);
     if (!proposalRow) return res.status(404).json({ error: 'Project not found' });
-    if (!canAccessProposal(req.user, proposalRow)) {
+    if (!canEditProposal(req.user, proposalRow)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
     const previousStatus = normalizeProposalStatus(proposalRow.status) || proposalRow.status;
-    const reviewerId = (req.user.role === 'admin' || req.user.role === 'reviewer') ? req.user.sub : null;
     await query(
       `update proposals
        set status = $2,
            review_notes = $3,
-           reviewer_id = coalesce($4, reviewer_id),
            last_status_changed_at = now()
        where id = $1`,
-      [req.params.id, nextStatus, parsed.data.note, reviewerId],
+      [req.params.id, nextStatus, parsed.data.note],
     );
 
     await query(
@@ -824,34 +822,8 @@ app.patch(
 app.delete(
   '/api/proposals/:id',
   requireAuth,
-  requireRole(['admin']),
   asyncRoute(async (req, res) => {
-    const proposalResult = await query(
-      `select id, title
-       from proposals
-       where id = $1`,
-      [req.params.id],
-    );
-    const proposal = proposalResult.rows[0];
-    if (!proposal) return res.status(404).json({ error: 'Project not found' });
-
-    const documentsResult = await query(
-      `select path
-       from documents
-       where proposal_id = $1`,
-      [req.params.id],
-    );
-
-    await query(`delete from proposals where id = $1`, [req.params.id]);
-
-    await Promise.all(
-      documentsResult.rows.map((row) => deleteStoredFile(row.path)),
-    );
-    await logActivity(req.user.sub, 'DELETE_PROPOSAL', 'proposal', req.params.id, {
-      title: proposal.title,
-    });
-
-    return res.json({ ok: true });
+    return res.status(403).json({ error: 'Project deletion is disabled in this application.' });
   }),
 );
 
@@ -865,7 +837,7 @@ app.get(
     const params = [];
     const filters = [];
 
-    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
+    if (req.user.role !== 'admin') {
       params.push(req.user.sub);
       filters.push(`p.student_id = $${params.length}`);
     }
@@ -945,16 +917,18 @@ app.post(
 app.delete(
   '/api/folders/:id',
   requireAuth,
-  requireRole(['admin']),
   asyncRoute(async (req, res) => {
     const folderResult = await query(
-      `select id, name, proposal_id
+      `select id, name, proposal_id, student_id
        from folders
        where id = $1`,
       [req.params.id],
     );
     const folder = folderResult.rows[0];
     if (!folder) return res.status(404).json({ error: 'Folder not found' });
+    if (folder.student_id !== req.user.sub) {
+      return res.status(403).json({ error: 'Only the project owner can delete folders.' });
+    }
 
     await query(`delete from folders where id = $1`, [req.params.id]);
     await logActivity(req.user.sub, 'DELETE_FOLDER', 'folder', req.params.id, {
@@ -976,7 +950,7 @@ app.get(
     const params = [];
     const filters = [];
 
-    if (req.user.role !== 'admin' && req.user.role !== 'reviewer') {
+    if (req.user.role !== 'admin') {
       params.push(req.user.sub);
       filters.push(`p.student_id = $${params.length}`);
     }
@@ -1137,7 +1111,7 @@ app.get(
     );
     const document = result.rows[0];
     if (!document) return res.status(404).json({ error: 'Document not found' });
-    if (req.user.role !== 'admin' && req.user.role !== 'reviewer' && document.student_id !== req.user.sub) {
+    if (req.user.role !== 'admin' && document.student_id !== req.user.sub) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 

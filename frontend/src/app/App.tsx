@@ -1,9 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
-  Activity,
   ArrowDownToLine,
   CheckCircle2,
-  FileBadge2,
   FilePlus2,
   FolderPlus,
   FolderTree,
@@ -27,12 +25,10 @@ import {
   createUser,
   deleteDocument,
   deleteFolder,
-  deleteProposal,
   deleteUser,
   downloadDocument,
   getCurrentUser,
   getProposal,
-  listLogs,
   listProposals,
   listUsers,
   login,
@@ -41,7 +37,6 @@ import {
   updateProposal,
   updateProposalStatus,
   uploadDocument,
-  type ActivityLog,
   type AuthUser,
   type DocumentItem,
   type FolderItem,
@@ -55,7 +50,7 @@ import {
 } from './api/client';
 import { BrandLogo, ProjectLogoMark } from './components/BrandLogo';
 
-type View = 'dashboard' | 'workspace' | 'users' | 'activity';
+type View = 'dashboard' | 'workspace' | 'users';
 type AuthMode = 'login' | 'register';
 type Toast = { kind: 'success' | 'error'; text: string } | null;
 type FolderNode = FolderItem & { children: FolderNode[] };
@@ -92,13 +87,6 @@ const initialProposalForm: ProposalFormState = {
   teamMembers: '',
 };
 
-const initialNewUserForm = {
-  name: '',
-  email: '',
-  password: '',
-  role: 'student' as Role,
-};
-
 const initialFolderForm = {
   name: '',
   scheme: '',
@@ -109,6 +97,13 @@ const initialUploadForm = {
   folderId: '',
   category: 'supporting-document',
   description: '',
+};
+
+const initialNewUserForm = {
+  name: '',
+  email: '',
+  password: '',
+  role: 'student' as Role,
 };
 
 export default function App() {
@@ -125,15 +120,14 @@ export default function App() {
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
 
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
 
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
+  const [users, setUsers] = useState<UserDirectoryItem[]>([]);
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<ProposalWorkspace | null>(null);
-  const [users, setUsers] = useState<UserDirectoryItem[]>([]);
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
 
   const [proposalForm, setProposalForm] = useState<ProposalFormState>(initialProposalForm);
   const [statusForm, setStatusForm] = useState<{ status: ProposalStatus; note: string }>({
@@ -174,9 +168,8 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) {
       setProposals([]);
-      setWorkspace(null);
       setUsers([]);
-      setLogs([]);
+      setWorkspace(null);
       setSelectedProposalId(null);
       return;
     }
@@ -201,50 +194,35 @@ export default function App() {
       note: workspace.item.reviewNotes || '',
     });
 
-    if (currentUser?.role !== 'admin' && currentUser?.role !== 'reviewer') {
+    if (currentUser?.role === 'student') {
       setProposalForm(proposalToForm(workspace.item));
     }
   }, [workspace?.item?.id, workspace?.item?.status, workspace?.item?.reviewNotes, currentUser?.role]);
 
-  const personalProposal = currentUser?.role !== 'admin' && currentUser?.role !== 'reviewer' ? proposals[0] ?? null : null;
+  const personalProposal = currentUser?.role === 'student' ? proposals[0] ?? null : null;
+  const folderTree = useMemo(() => buildFolderTree(workspace?.folders ?? []), [workspace?.folders]);
+  const folderOptions = useMemo(() => flattenFolderOptions(folderTree), [folderTree]);
+
   const filteredProposals = useMemo(() => {
-    const search = deferredQuery.trim().toLowerCase();
-    if (!search) return proposals;
+    const normalized = deferredQuery.trim().toLowerCase();
+    if (!normalized) return proposals;
 
     return proposals.filter((proposal) =>
-      [
-        proposal.title,
-        proposal.domain,
-        proposal.scheme,
-        proposal.studentName,
-        proposal.status,
-      ]
+      [proposal.title, proposal.domain, proposal.scheme, proposal.studentName, proposal.status]
         .join(' ')
         .toLowerCase()
-        .includes(search),
+        .includes(normalized),
     );
   }, [deferredQuery, proposals]);
 
-  const proposalMetrics = useMemo(() => {
-    const statuses = {
-      total: proposals.length,
-      submitted: proposals.filter((proposal) => proposal.status === 'Submitted').length,
-      underReview: proposals.filter((proposal) => proposal.status === 'Under Review').length,
-      changesRequested: proposals.filter((proposal) => proposal.status === 'Changes Requested').length,
-      approved: proposals.filter((proposal) => proposal.status === 'Approved').length,
-      rejected: proposals.filter((proposal) => proposal.status === 'Rejected').length,
-      documents: proposals.reduce((sum, proposal) => sum + proposal.documentCount, 0),
-      folders: proposals.reduce((sum, proposal) => sum + proposal.folderCount, 0),
-    };
-
-    return statuses;
-  }, [proposals]);
-
-  const folderTree = useMemo(() => buildFolderTree(workspace?.folders ?? []), [workspace?.folders]);
-  const folderSelectOptions = useMemo(
-    () => flattenFolderOptions(folderTree),
-    [folderTree],
-  );
+  const metrics = useMemo(() => ({
+    total: proposals.length,
+    underReview: proposals.filter((proposal) => proposal.status === 'Under Review').length,
+    approved: proposals.filter((proposal) => proposal.status === 'Approved').length,
+    rejected: proposals.filter((proposal) => proposal.status === 'Rejected').length,
+    documents: proposals.reduce((sum, proposal) => sum + proposal.documentCount, 0),
+    folders: proposals.reduce((sum, proposal) => sum + proposal.folderCount, 0),
+  }), [proposals]);
 
   function showToast(kind: 'success' | 'error', text: string) {
     setToast({ kind, text });
@@ -258,24 +236,9 @@ export default function App() {
     setDataLoading(true);
     try {
       if (user.role === 'admin') {
-        const [proposalResponse, userResponse, logResponse] = await Promise.allSettled([
-          listProposals(),
-          listUsers(),
-          listLogs(120),
-        ]);
-        const pResult = proposalResponse.status === 'fulfilled' ? proposalResponse.value : { items: [] };
-        const uResult = userResponse.status === 'fulfilled' ? userResponse.value : { items: [] };
-        const lResult = logResponse.status === 'fulfilled' ? logResponse.value : { items: [] };
-        setProposals(pResult.items);
-        setUsers(uResult.items);
-        setLogs(lResult.items);
-        setSelectedProposalId((current) => {
-          if (current && pResult.items.some((item) => item.id === current)) return current;
-          return pResult.items[0]?.id ?? null;
-        });
-      } else if (user.role === 'reviewer') {
-        const proposalResponse = await listProposals();
+        const [proposalResponse, userResponse] = await Promise.all([listProposals(), listUsers()]);
         setProposals(proposalResponse.items);
+        setUsers(userResponse.items);
         setSelectedProposalId((current) => {
           if (current && proposalResponse.items.some((item) => item.id === current)) return current;
           return proposalResponse.items[0]?.id ?? null;
@@ -298,8 +261,7 @@ export default function App() {
   async function refreshWorkspace(proposalId: string) {
     setWorkspaceLoading(true);
     try {
-      const nextWorkspace = await getProposal(proposalId);
-      setWorkspace(nextWorkspace);
+      setWorkspace(await getProposal(proposalId));
     } catch (error) {
       setWorkspace(null);
       showToast('error', getErrorMessage(error));
@@ -312,21 +274,17 @@ export default function App() {
     event.preventDefault();
     setActionLoading(true);
     try {
-      if (authMode === 'login') {
-        const { token, user } = await login(email, password, authRole);
-        setAuthToken(token);
-        setCurrentUser(user);
-        showToast('success', 'Signed in successfully.');
-      } else {
-        const { token, user } = await register(name, email, password, authRole);
-        setAuthToken(token);
-        setCurrentUser(user);
-        showToast('success', 'Account created successfully.');
-      }
+      const authResponse =
+        authMode === 'login'
+          ? await login(email, password, authRole)
+          : await register(name, email, password, authRole);
 
+      setAuthToken(authResponse.token);
+      setCurrentUser(authResponse.user);
+      setName('');
       setEmail('');
       setPassword('');
-      setName('');
+      showToast('success', authMode === 'login' ? 'Signed in successfully.' : 'Account created successfully.');
     } catch (error) {
       showToast('error', getErrorMessage(error));
     } finally {
@@ -343,7 +301,7 @@ export default function App() {
 
   async function handleProposalSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentUser) return;
+    if (!currentUser || currentUser.role !== 'student') return;
 
     setActionLoading(true);
     try {
@@ -369,7 +327,7 @@ export default function App() {
 
   async function handleStatusSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentUser || !workspace?.item) return;
+    if (!currentUser || currentUser.role !== 'student' || !workspace?.item) return;
 
     setActionLoading(true);
     try {
@@ -385,19 +343,21 @@ export default function App() {
 
   async function handleCreateFolder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentUser || !workspace?.item) return;
+    if (!currentUser || currentUser.role !== 'student' || !workspace?.item) return;
 
     setActionLoading(true);
     try {
-      await createFolder({
+      const response = await createFolder({
         name: folderForm.name,
         proposalId: workspace.item.id,
         parentId: folderForm.parentId || null,
         scheme: folderForm.scheme,
       });
+
       await Promise.all([refreshOverview(currentUser), refreshWorkspace(workspace.item.id)]);
       setFolderForm(initialFolderForm);
-      showToast('success', 'Folder created successfully.');
+      setUploadForm((current) => ({ ...current, folderId: response.item.id }));
+      showToast('success', 'Folder created and selected for uploads.');
     } catch (error) {
       showToast('error', getErrorMessage(error));
     } finally {
@@ -406,10 +366,9 @@ export default function App() {
   }
 
   async function handleUploadDocuments(event: ChangeEvent<HTMLInputElement>) {
-    if (!currentUser || !workspace?.item) return;
+    if (!currentUser || currentUser.role !== 'student' || !workspace?.item) return;
 
-    const input = event.currentTarget;
-    const files = Array.from(input.files || []);
+    const files = Array.from(event.currentTarget.files || []);
     if (!files.length) return;
 
     setActionLoading(true);
@@ -425,9 +384,10 @@ export default function App() {
           }),
         ),
       );
+
       await Promise.all([refreshOverview(currentUser), refreshWorkspace(workspace.item.id)]);
-      input.value = '';
-      showToast('success', `${files.length} document${files.length > 1 ? 's' : ''} uploaded.`);
+      event.currentTarget.value = '';
+      showToast('success', `${files.length} document${files.length === 1 ? '' : 's'} uploaded.`);
     } catch (error) {
       showToast('error', getErrorMessage(error));
     } finally {
@@ -452,7 +412,7 @@ export default function App() {
   }
 
   async function handleDeleteDocument(documentId: string) {
-    if (!currentUser || !workspace?.item) return;
+    if (!currentUser || currentUser.role !== 'admin' || !workspace?.item) return;
     if (!window.confirm('Delete this uploaded document?')) return;
 
     setActionLoading(true);
@@ -468,32 +428,18 @@ export default function App() {
   }
 
   async function handleDeleteFolder(folderId: string) {
-    if (!currentUser || !workspace?.item) return;
-    if (!window.confirm('Delete this folder? Documents inside it will stay available.')) return;
+    if (!currentUser || currentUser.role !== 'student' || !workspace?.item) return;
+    if (!window.confirm('Delete this folder?')) return;
 
     setActionLoading(true);
     try {
       await deleteFolder(folderId);
       await Promise.all([refreshOverview(currentUser), refreshWorkspace(workspace.item.id)]);
+      setUploadForm((current) => ({
+        ...current,
+        folderId: current.folderId === folderId ? '' : current.folderId,
+      }));
       showToast('success', 'Folder deleted.');
-    } catch (error) {
-      showToast('error', getErrorMessage(error));
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleDeleteProposal() {
-    if (!currentUser || !workspace?.item) return;
-    if (!window.confirm('Delete this project proposal and all its documents?')) return;
-
-    setActionLoading(true);
-    try {
-      const proposalId = workspace.item.id;
-      await deleteProposal(proposalId);
-      await refreshOverview(currentUser);
-      setWorkspace(null);
-      showToast('success', 'Project proposal deleted.');
     } catch (error) {
       showToast('error', getErrorMessage(error));
     } finally {
@@ -509,9 +455,7 @@ export default function App() {
     try {
       await createUser(newUserForm);
       setNewUserForm(initialNewUserForm);
-      const [nextUsers, nextLogs] = await Promise.all([listUsers(), listLogs(120)]);
-      setUsers(nextUsers.items);
-      setLogs(nextLogs.items);
+      setUsers((await listUsers()).items);
       showToast('success', 'User added successfully.');
     } catch (error) {
       showToast('error', getErrorMessage(error));
@@ -522,19 +466,14 @@ export default function App() {
 
   async function handleDeleteUser(userId: string) {
     if (!currentUser || currentUser.role !== 'admin') return;
-    if (!window.confirm('Remove this user and their project data?')) return;
+    if (!window.confirm('Remove this user and all of their project data?')) return;
 
     setActionLoading(true);
     try {
       await deleteUser(userId);
-      const [proposalResponse, userResponse, logResponse] = await Promise.all([
-        listProposals(),
-        listUsers(),
-        listLogs(120),
-      ]);
+      const [proposalResponse, userResponse] = await Promise.all([listProposals(), listUsers()]);
       setProposals(proposalResponse.items);
       setUsers(userResponse.items);
-      setLogs(logResponse.items);
       setSelectedProposalId((current) => {
         if (current && proposalResponse.items.some((item) => item.id === current)) return current;
         return proposalResponse.items[0]?.id ?? null;
@@ -559,21 +498,21 @@ export default function App() {
           <section className="auth-hero">
             <div className="auth-hero-brand">
               <div className="auth-hero-mark">
-                <ProjectLogoMark size={52} />
+                <ProjectLogoMark size={54} />
               </div>
               <h1>Project Proposal Checker</h1>
             </div>
             <div className="hero-keywords">
               <span>Proposal Tracking</span>
-              <span>Folder Management</span>
-              <span>Document Review</span>
+              <span>Folder Vault</span>
+              <span>Document Flow</span>
               <span>Status Updates</span>
             </div>
           </section>
 
           <section className="auth-card">
             <div className="auth-top-switches">
-              <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+              <div className="auth-mode-switch">
                 <button
                   className={authMode === 'login' ? 'switch-button active' : 'switch-button'}
                   type="button"
@@ -589,7 +528,8 @@ export default function App() {
                   Register
                 </button>
               </div>
-              <div className="auth-role-switch" role="tablist" aria-label="Role">
+
+              <div className="auth-role-switch">
                 <button
                   className={authRole === 'student' ? 'switch-button active' : 'switch-button'}
                   type="button"
@@ -606,15 +546,14 @@ export default function App() {
                 </button>
               </div>
             </div>
+
             <div className="auth-card-header">
-              <ProjectLogoMark size={44} />
+              <div className="auth-card-logo-mark">
+                <ProjectLogoMark size={28} />
+              </div>
               <div>
                 <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'User'} login` : `${authRole === 'admin' ? 'Admin' : 'User'} register`}</h2>
-                <p>
-                  {authMode === 'login'
-                    ? `Sign in as ${authRole === 'admin' ? 'admin' : 'user'}.`
-                    : `Create a ${authRole === 'admin' ? 'admin' : 'user'} account.`}
-                </p>
+                <p>{authMode === 'login' ? 'Open your workspace.' : 'Create your access to the workspace.'}</p>
               </div>
             </div>
 
@@ -628,22 +567,12 @@ export default function App() {
 
               <label>
                 Email address
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  required
-                />
+                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
               </label>
 
               <label>
                 Password
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                />
+                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
               </label>
 
               <button className="primary-button" type="submit" disabled={actionLoading}>
@@ -651,12 +580,6 @@ export default function App() {
                 {authMode === 'login' ? 'Sign in' : 'Register'}
               </button>
             </form>
-
-            <div className="auth-helper-text">
-              {authMode === 'login'
-                ? 'Use the switch above if you need to create an account.'
-                : 'Use the switch above if you already have an account.'}
-            </div>
           </section>
         </div>
       </div>
@@ -666,30 +589,16 @@ export default function App() {
   return (
     <div className="app-shell">
       {toast ? <ToastView toast={toast} /> : null}
-      <button
-        className="mobile-menu-button"
-        type="button"
-        onClick={() => setSidebarOpen(true)}
-        aria-label="Open navigation"
-      >
+
+      <button className="mobile-menu-button" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
         <Menu size={18} />
       </button>
-      <button
-        className={`mobile-overlay ${sidebarOpen ? 'open' : ''}`}
-        type="button"
-        onClick={() => setSidebarOpen(false)}
-        aria-label="Close navigation"
-      />
+      <button className={`mobile-overlay ${sidebarOpen ? 'open' : ''}`} type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation" />
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-top">
           <BrandLogo compact />
-          <button
-            className="icon-button sidebar-close"
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            aria-label="Close navigation"
-          >
+          <button className="icon-button sidebar-close" type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">
             <X size={18} />
           </button>
         </div>
@@ -703,52 +612,18 @@ export default function App() {
         </div>
 
         <nav className="sidebar-nav">
-          <button
-            className={view === 'dashboard' ? 'nav-link active' : 'nav-link'}
-            type="button"
-            onClick={() => {
-              setView('dashboard');
-              setSidebarOpen(false);
-            }}
-          >
+          <button className={view === 'dashboard' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => { setView('dashboard'); setSidebarOpen(false); }}>
             <LayoutDashboard size={18} />
             Dashboard
           </button>
-          <button
-            className={view === 'workspace' ? 'nav-link active' : 'nav-link'}
-            type="button"
-            onClick={() => {
-              setView('workspace');
-              setSidebarOpen(false);
-            }}
-          >
+          <button className={view === 'workspace' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => { setView('workspace'); setSidebarOpen(false); }}>
             <Workflow size={18} />
-            Project Workspace
+            Workspace
           </button>
           {currentUser.role === 'admin' ? (
-            <button
-              className={view === 'users' ? 'nav-link active' : 'nav-link'}
-              type="button"
-              onClick={() => {
-                setView('users');
-                setSidebarOpen(false);
-              }}
-            >
+            <button className={view === 'users' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => { setView('users'); setSidebarOpen(false); }}>
               <UserCog size={18} />
               User Management
-            </button>
-          ) : null}
-          {currentUser.role === 'admin' ? (
-            <button
-              className={view === 'activity' ? 'nav-link active' : 'nav-link'}
-              type="button"
-              onClick={() => {
-                setView('activity');
-                setSidebarOpen(false);
-              }}
-            >
-              <Activity size={18} />
-              Activity Logs
             </button>
           ) : null}
         </nav>
@@ -769,7 +644,7 @@ export default function App() {
           </div>
 
           <div className="topbar-actions">
-            {view === 'dashboard' || (view === 'workspace' && (currentUser.role === 'admin' || currentUser.role === 'reviewer')) ? (
+            {view === 'dashboard' || (view === 'workspace' && currentUser.role === 'admin') ? (
               <label className="search-field">
                 <Search size={16} />
                 <input
@@ -786,11 +661,10 @@ export default function App() {
           <DashboardView
             currentUser={currentUser}
             dataLoading={dataLoading}
+            users={users}
             proposals={filteredProposals}
-            metrics={proposalMetrics}
+            metrics={metrics}
             personalProposal={personalProposal}
-            workspace={workspace}
-            logs={logs}
             onOpenWorkspace={(proposalId) => {
               setSelectedProposalId(proposalId);
               setView('workspace');
@@ -812,12 +686,13 @@ export default function App() {
             uploadForm={uploadForm}
             statusForm={statusForm}
             folderTree={folderTree}
-            folderOptions={folderSelectOptions}
-            onProposalSelect={(proposalId) => setSelectedProposalId(proposalId)}
+            folderOptions={folderOptions}
+            onProposalSelect={setSelectedProposalId}
             onProposalFormChange={setProposalForm}
             onFolderFormChange={setFolderForm}
             onUploadFormChange={setUploadForm}
             onStatusFormChange={setStatusForm}
+            onUploadFolderPick={(folderId) => setUploadForm((current) => ({ ...current, folderId }))}
             onSaveProposal={handleProposalSubmit}
             onSaveStatus={handleStatusSubmit}
             onCreateFolder={handleCreateFolder}
@@ -825,7 +700,6 @@ export default function App() {
             onDownloadDocument={handleDownloadDocument}
             onDeleteDocument={handleDeleteDocument}
             onDeleteFolder={handleDeleteFolder}
-            onDeleteProposal={handleDeleteProposal}
           />
         ) : null}
 
@@ -840,10 +714,6 @@ export default function App() {
             onDeleteUser={handleDeleteUser}
           />
         ) : null}
-
-        {view === 'activity' && currentUser.role === 'admin' ? (
-          <ActivityView logs={logs} />
-        ) : null}
       </main>
     </div>
   );
@@ -852,143 +722,95 @@ export default function App() {
 function DashboardView({
   currentUser,
   dataLoading,
+  users,
   proposals,
   metrics,
   personalProposal,
-  workspace,
-  logs,
   onOpenWorkspace,
 }: {
   currentUser: AuthUser;
   dataLoading: boolean;
+  users: UserDirectoryItem[];
   proposals: ProposalSummary[];
   metrics: {
     total: number;
-    submitted: number;
     underReview: number;
-    changesRequested: number;
     approved: number;
     rejected: number;
     documents: number;
     folders: number;
   };
   personalProposal: ProposalSummary | null;
-  workspace: ProposalWorkspace | null;
-  logs: ActivityLog[];
   onOpenWorkspace: (proposalId: string) => void;
 }) {
-  const boardStatuses: ProposalStatus[] = [
-    'Submitted',
-    'Under Review',
-    'Changes Requested',
-    'Approved',
-    'Rejected',
-  ];
-
   return (
     <div className="page-grid">
       <section className="metric-row">
-        <MetricCard icon={<FileBadge2 size={18} />} label="Total Submitted" value={metrics.total} tone="neutral" />
-        <MetricCard icon={<Workflow size={18} />} label="Under Review" value={metrics.underReview} tone="warning" />
-        <MetricCard icon={<CheckCircle2 size={18} />} label="Approved" value={metrics.approved} tone="success" />
+        <MetricCard icon={<Workflow size={18} />} label="Total Projects" value={metrics.total} tone="neutral" />
         <MetricCard icon={<FolderTree size={18} />} label="Folders" value={metrics.folders} tone="neutral" />
         <MetricCard icon={<ArrowDownToLine size={18} />} label="Documents" value={metrics.documents} tone="neutral" />
+        <MetricCard icon={<CheckCircle2 size={18} />} label="Approved" value={metrics.approved} tone="success" />
       </section>
 
       {dataLoading ? (
-        <SectionCard title="Loading dashboard" description="Refreshing project and tracking data.">
+        <SectionCard title="Loading dashboard" description="Refreshing project and workspace data.">
           <div className="empty-state">
             <LoaderCircle className="spin" size={20} />
             <span>Loading current records...</span>
           </div>
         </SectionCard>
-      ) : null}
-
-      {currentUser.role !== 'admin' && currentUser.role !== 'reviewer' ? (
-        <>
-          <SectionCard
-            title="My proposal board"
-            description="See how many proposals you have submitted and where your current project stands."
-          >
-            {!personalProposal ? (
-              <EmptyState
-                icon={<FilePlus2 size={18} />}
-                title="No proposal submitted yet"
-                description="Create one project proposal in the workspace to start the tracking flow."
-              />
-            ) : (
-              <div className="student-highlight">
-                <div className="student-highlight-copy">
-                  <StatusPill status={personalProposal.status} />
-                  <h3>{personalProposal.title}</h3>
-                  <p>{personalProposal.abstract}</p>
-                  <div className="inline-meta">
-                    <span>{personalProposal.domain}</span>
-                    <span>{personalProposal.scheme || 'General scheme'}</span>
-                    <span>Updated {formatDateTime(personalProposal.updatedAt)}</span>
-                  </div>
+      ) : currentUser.role === 'student' ? (
+        <SectionCard title="My project board" description="Your proposal, folder system, and document activity in one view.">
+          {!personalProposal ? (
+            <EmptyState
+              icon={<FilePlus2 size={18} />}
+              title="No proposal submitted yet"
+              description="Create one project proposal in the workspace to start using folders and documents."
+            />
+          ) : (
+            <div className="student-highlight">
+              <div className="student-highlight-copy">
+                <StatusPill status={personalProposal.status} />
+                <h3>{personalProposal.title}</h3>
+                <p>{personalProposal.abstract}</p>
+                <div className="inline-meta">
+                  <span>{personalProposal.domain}</span>
+                  <span>{personalProposal.scheme || 'General scheme'}</span>
+                  <span>{personalProposal.folderCount} folders</span>
+                  <span>{personalProposal.documentCount} documents</span>
                 </div>
-                <button className="primary-button" type="button" onClick={() => onOpenWorkspace(personalProposal.id)}>
-                  Open workspace
-                </button>
               </div>
-            )}
-          </SectionCard>
-
-          <SectionCard
-            title="Recent tracking history"
-            description="Your latest status updates and proposal movement."
-          >
-            <HistoryList items={workspace?.history ?? []} emptyText="Status updates will appear here after you start tracking." />
-          </SectionCard>
-        </>
+              <button className="primary-button" type="button" onClick={() => onOpenWorkspace(personalProposal.id)}>
+                Open workspace
+              </button>
+            </div>
+          )}
+        </SectionCard>
       ) : (
         <>
-          <SectionCard
-            title="Admin tracking board"
-            description="Monitor submitted proposals and jump into any project workspace."
-          >
+          <SectionCard title="Admin overview" description="Admin can manage users and remove uploaded documents when necessary.">
+            <div className="admin-overview-grid">
+              <MetaItem label="Users" value={String(users.length)} />
+              <MetaItem label="Under review" value={String(metrics.underReview)} />
+              <MetaItem label="Rejected" value={String(metrics.rejected)} />
+              <MetaItem label="Approved" value={String(metrics.approved)} />
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Project access" description="Open a project workspace to inspect folders and delete documents if needed.">
             {!proposals.length ? (
-              <EmptyState
-                icon={<Users size={18} />}
-                title="No proposals yet"
-                description="Submitted projects will appear here as users start working."
-              />
+              <EmptyState icon={<Users size={18} />} title="No projects yet" description="User projects will appear here." />
             ) : (
-              <div className="board-grid">
-                {boardStatuses.map((status) => (
-                  <article key={status} className="board-column">
-                    <div className="board-column-header">
-                      <StatusPill status={status} />
-                      <strong>{proposals.filter((proposal) => proposal.status === status).length}</strong>
-                    </div>
-                    <div className="board-column-list">
-                      {proposals
-                        .filter((proposal) => proposal.status === status)
-                        .map((proposal) => (
-                          <button
-                            key={proposal.id}
-                            className="board-card"
-                            type="button"
-                            onClick={() => onOpenWorkspace(proposal.id)}
-                          >
-                            <strong>{proposal.title}</strong>
-                            <span>{proposal.studentName}</span>
-                            <small>
-                              {proposal.domain}
-                              {proposal.scheme ? ` · ${proposal.scheme}` : ''}
-                            </small>
-                          </button>
-                        ))}
-                    </div>
-                  </article>
+              <div className="proposal-selector-grid">
+                {proposals.map((proposal) => (
+                  <button key={proposal.id} className="proposal-selector" type="button" onClick={() => onOpenWorkspace(proposal.id)}>
+                    <strong>{proposal.title}</strong>
+                    <span>{proposal.studentName}</span>
+                    <small>{proposal.domain}{proposal.scheme ? ` / ${proposal.scheme}` : ''}</small>
+                  </button>
                 ))}
               </div>
             )}
-          </SectionCard>
-
-          <SectionCard title="Recent backend logs" description="Latest recorded actions across users and proposals.">
-            <ActivityList items={logs.slice(0, 8)} />
           </SectionCard>
         </>
       )}
@@ -1015,6 +837,7 @@ function WorkspaceView({
   onFolderFormChange,
   onUploadFormChange,
   onStatusFormChange,
+  onUploadFolderPick,
   onSaveProposal,
   onSaveStatus,
   onCreateFolder,
@@ -1022,7 +845,6 @@ function WorkspaceView({
   onDownloadDocument,
   onDeleteDocument,
   onDeleteFolder,
-  onDeleteProposal,
 }: {
   currentUser: AuthUser;
   proposals: ProposalSummary[];
@@ -1042,6 +864,7 @@ function WorkspaceView({
   onFolderFormChange: (value: { name: string; scheme: string; parentId: string }) => void;
   onUploadFormChange: (value: { folderId: string; category: string; description: string }) => void;
   onStatusFormChange: (value: { status: ProposalStatus; note: string }) => void;
+  onUploadFolderPick: (folderId: string) => void;
   onSaveProposal: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onSaveStatus: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onCreateFolder: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -1049,17 +872,15 @@ function WorkspaceView({
   onDownloadDocument: (documentId: string) => Promise<void>;
   onDeleteDocument: (documentId: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  onDeleteProposal: () => Promise<void>;
 }) {
-  const canDelete = currentUser.role === 'admin';
-  const canEdit = currentUser.role === 'admin' || currentUser.role === 'student';
-  const isReviewer = currentUser.role === 'reviewer';
+  if (currentUser.role === 'admin' && proposals.length) {
+    const summary = query.trim()
+      ? `${proposals.length} matching project${proposals.length === 1 ? '' : 's'}`
+      : `${proposals.length} project${proposals.length === 1 ? '' : 's'}`;
 
-  if ((currentUser.role === 'admin' || currentUser.role === 'reviewer') && proposals.length) {
-    const querySummary = query.trim() ? `${proposals.length} project match${proposals.length === 1 ? '' : 'es'}` : `${proposals.length} project${proposals.length === 1 ? '' : 's'}`;
     return (
       <div className="page-grid">
-        <SectionCard title="Select project" description={querySummary}>
+        <SectionCard title="Choose project workspace" description={summary}>
           <div className="proposal-selector-grid">
             {proposals.map((proposal) => (
               <button
@@ -1070,10 +891,7 @@ function WorkspaceView({
               >
                 <strong>{proposal.title}</strong>
                 <span>{proposal.studentName}</span>
-                <small>
-                  {proposal.domain}
-                  {proposal.scheme ? ` · ${proposal.scheme}` : ''}
-                </small>
+                <small>{proposal.domain}{proposal.scheme ? ` / ${proposal.scheme}` : ''}</small>
               </button>
             ))}
           </div>
@@ -1090,11 +908,11 @@ function WorkspaceView({
           statusForm={statusForm}
           folderTree={folderTree}
           folderOptions={folderOptions}
-          canDelete={canDelete}
           onProposalFormChange={onProposalFormChange}
           onFolderFormChange={onFolderFormChange}
           onUploadFormChange={onUploadFormChange}
           onStatusFormChange={onStatusFormChange}
+          onUploadFolderPick={onUploadFolderPick}
           onSaveProposal={onSaveProposal}
           onSaveStatus={onSaveStatus}
           onCreateFolder={onCreateFolder}
@@ -1102,19 +920,15 @@ function WorkspaceView({
           onDownloadDocument={onDownloadDocument}
           onDeleteDocument={onDeleteDocument}
           onDeleteFolder={onDeleteFolder}
-          onDeleteProposal={onDeleteProposal}
         />
       </div>
     );
   }
 
-  if (currentUser.role !== 'admin' && currentUser.role !== 'reviewer' && !workspace && !workspaceLoading) {
+  if (currentUser.role === 'student' && !workspace && !workspaceLoading) {
     return (
       <div className="page-grid">
-        <SectionCard
-          title="Create your project proposal"
-          description="Each user can create one project and then manage documents, folders, and status tracking in the same workspace."
-        >
+        <SectionCard title="Create your project proposal" description="Create one proposal and then organize folders, subfolders, and all related documents inside it.">
           <ProjectForm
             currentUser={currentUser}
             proposalForm={proposalForm}
@@ -1122,20 +936,6 @@ function WorkspaceView({
             onProposalFormChange={onProposalFormChange}
             onSubmit={onSaveProposal}
             submitLabel="Create project proposal"
-          />
-        </SectionCard>
-      </div>
-    );
-  }
-
-  if (!workspace && !workspaceLoading) {
-    return (
-      <div className="page-grid">
-        <SectionCard title="No workspace selected" description="Pick a proposal to view documents, folders, and tracking details.">
-          <EmptyState
-            icon={<Workflow size={18} />}
-            title="No active workspace"
-            description="Select a project from the dashboard or the list above."
           />
         </SectionCard>
       </div>
@@ -1155,11 +955,11 @@ function WorkspaceView({
         statusForm={statusForm}
         folderTree={folderTree}
         folderOptions={folderOptions}
-        canDelete={canDelete}
         onProposalFormChange={onProposalFormChange}
         onFolderFormChange={onFolderFormChange}
         onUploadFormChange={onUploadFormChange}
         onStatusFormChange={onStatusFormChange}
+        onUploadFolderPick={onUploadFolderPick}
         onSaveProposal={onSaveProposal}
         onSaveStatus={onSaveStatus}
         onCreateFolder={onCreateFolder}
@@ -1167,7 +967,6 @@ function WorkspaceView({
         onDownloadDocument={onDownloadDocument}
         onDeleteDocument={onDeleteDocument}
         onDeleteFolder={onDeleteFolder}
-        onDeleteProposal={onDeleteProposal}
       />
     </div>
   );
@@ -1184,11 +983,11 @@ function WorkspaceDetailPanel({
   statusForm,
   folderTree,
   folderOptions,
-  canDelete,
   onProposalFormChange,
   onFolderFormChange,
   onUploadFormChange,
   onStatusFormChange,
+  onUploadFolderPick,
   onSaveProposal,
   onSaveStatus,
   onCreateFolder,
@@ -1196,7 +995,6 @@ function WorkspaceDetailPanel({
   onDownloadDocument,
   onDeleteDocument,
   onDeleteFolder,
-  onDeleteProposal,
 }: {
   currentUser: AuthUser;
   workspace: ProposalWorkspace | null;
@@ -1208,11 +1006,11 @@ function WorkspaceDetailPanel({
   statusForm: { status: ProposalStatus; note: string };
   folderTree: FolderNode[];
   folderOptions: Array<{ id: string; label: string }>;
-  canDelete: boolean;
   onProposalFormChange: (value: ProposalFormState) => void;
   onFolderFormChange: (value: { name: string; scheme: string; parentId: string }) => void;
   onUploadFormChange: (value: { folderId: string; category: string; description: string }) => void;
   onStatusFormChange: (value: { status: ProposalStatus; note: string }) => void;
+  onUploadFolderPick: (folderId: string) => void;
   onSaveProposal: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onSaveStatus: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onCreateFolder: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -1220,11 +1018,12 @@ function WorkspaceDetailPanel({
   onDownloadDocument: (documentId: string) => Promise<void>;
   onDeleteDocument: (documentId: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  onDeleteProposal: () => Promise<void>;
 }) {
+  const activeUploadFolder = folderOptions.find((folder) => folder.id === uploadForm.folderId) || null;
+
   if (workspaceLoading || !workspace) {
     return (
-      <SectionCard title="Loading workspace" description="Gathering project details, folders, and logs.">
+      <SectionCard title="Loading workspace" description="Gathering project details, folders, and documents.">
         <div className="empty-state">
           <LoaderCircle className="spin" size={20} />
           <span>Loading workspace...</span>
@@ -1239,10 +1038,10 @@ function WorkspaceDetailPanel({
         <MetricCard icon={<Workflow size={18} />} label="Current Status" value={workspace.item.status} tone={statusTone(workspace.item.status)} />
         <MetricCard icon={<FolderTree size={18} />} label="Folders" value={workspace.item.folderCount} tone="neutral" />
         <MetricCard icon={<ArrowDownToLine size={18} />} label="Documents" value={workspace.item.documentCount} tone="neutral" />
-        <MetricCard icon={<Activity size={18} />} label="Last Updated" value={formatDate(workspace.item.updatedAt)} tone="neutral" />
+        <MetricCard icon={<CheckCircle2 size={18} />} label="Scheme" value={workspace.item.scheme || 'General'} tone="neutral" />
       </section>
 
-      <SectionCard title="Project summary" description="Core tracking details for the selected proposal.">
+      <SectionCard title="Project summary" description="Core project tracking information.">
         <div className="summary-panel">
           <div className="summary-primary">
             <StatusPill status={workspace.item.status} />
@@ -1252,28 +1051,22 @@ function WorkspaceDetailPanel({
           <div className="summary-meta-grid">
             <MetaItem label="User" value={workspace.item.studentName} />
             <MetaItem label="Domain" value={workspace.item.domain} />
-            <MetaItem label="Scheme" value={workspace.item.scheme || 'General'} />
             <MetaItem label="Submitted" value={formatDateTime(workspace.item.submittedAt)} />
             <MetaItem label="Updated" value={formatDateTime(workspace.item.updatedAt)} />
-            <MetaItem label="Review note" value={workspace.item.reviewNotes || 'No note added yet'} />
+            <MetaItem label="Note" value={workspace.item.reviewNotes || 'No note yet'} />
           </div>
         </div>
       </SectionCard>
 
       <div className="workspace-grid">
-        {(currentUser.role === 'admin' || currentUser.role === 'reviewer') ? (
-          <SectionCard title="Status tracking" description="Save review progress, approval, rejection, or requested changes.">
+        {currentUser.role === 'student' ? (
+          <SectionCard title="Status tracking" description="Update your project status and keep notes with it.">
             <form className="stack-form" onSubmit={onSaveStatus}>
               <label>
                 Status
                 <select
                   value={statusForm.status}
-                  onChange={(event) =>
-                    onStatusFormChange({
-                      ...statusForm,
-                      status: event.target.value as ProposalStatus,
-                    })
-                  }
+                  onChange={(event) => onStatusFormChange({ ...statusForm, status: event.target.value as ProposalStatus })}
                 >
                   {proposalStatusOptions.map((status) => (
                     <option key={status} value={status}>
@@ -1286,13 +1079,7 @@ function WorkspaceDetailPanel({
                 Tracking note
                 <textarea
                   value={statusForm.note}
-                  onChange={(event) =>
-                    onStatusFormChange({
-                      ...statusForm,
-                      note: event.target.value,
-                    })
-                  }
-                  placeholder="Add approval notes, rejection reasons, or review updates."
+                  onChange={(event) => onStatusFormChange({ ...statusForm, note: event.target.value })}
                   rows={5}
                 />
               </label>
@@ -1303,57 +1090,22 @@ function WorkspaceDetailPanel({
             </form>
           </SectionCard>
         ) : (
-          <SectionCard title="Status tracking" description="Your proposal status is managed by reviewers and admins.">
-            <form className="stack-form" onSubmit={onSaveStatus}>
-              <label>
-                Status
-                <select
-                  value={statusForm.status}
-                  onChange={(event) =>
-                    onStatusFormChange({
-                      ...statusForm,
-                      status: event.target.value as ProposalStatus,
-                    })
-                  }
-                >
-                  {proposalStatusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Tracking note
-                <textarea
-                  value={statusForm.note}
-                  onChange={(event) =>
-                    onStatusFormChange({
-                      ...statusForm,
-                      note: event.target.value,
-                    })
-                  }
-                  placeholder="Add approval notes, rejection reasons, or review updates."
-                  rows={5}
-                />
-              </label>
-              <button className="primary-button" type="submit" disabled={actionLoading}>
-                {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
-                Save tracking status
-              </button>
-            </form>
+          <SectionCard title="Admin scope" description="Admin can inspect this workspace and remove uploaded documents only.">
+            <div className="readonly-panel">
+              <StatusPill status={workspace.item.status} />
+              <p>{workspace.item.reviewNotes || 'No tracking note has been saved yet.'}</p>
+            </div>
           </SectionCard>
         )}
 
-        {(currentUser.role === 'admin' || currentUser.role === 'student') ? (
-          <SectionCard title="Folder structure" description="Create parent folders and subfolders with a scheme name.">
+        {currentUser.role === 'student' ? (
+          <SectionCard title="Folder builder" description="Create parent folders and nested subfolders for this project.">
             <form className="stack-form" onSubmit={onCreateFolder}>
               <label>
                 Folder name
                 <input
                   value={folderForm.name}
                   onChange={(event) => onFolderFormChange({ ...folderForm, name: event.target.value })}
-                  placeholder="Example: Main submission pack"
                   required
                 />
               </label>
@@ -1362,7 +1114,7 @@ function WorkspaceDetailPanel({
                 <input
                   value={folderForm.scheme}
                   onChange={(event) => onFolderFormChange({ ...folderForm, scheme: event.target.value })}
-                  placeholder="Example: Internal review"
+                  placeholder="Internal review, final, phase 1"
                 />
               </label>
               <label>
@@ -1386,22 +1138,24 @@ function WorkspaceDetailPanel({
             </form>
           </SectionCard>
         ) : (
-          <SectionCard title="Folder structure" description="You can view the folder tree but only students and admins can create folders.">
+          <SectionCard title="Workspace structure" description="Admin can inspect the folder structure here.">
             {!folderTree.length ? (
-              <EmptyState
-                icon={<FolderTree size={18} />}
-                title="No folders created yet"
-                description="Students and admins can create folders for this project."
-              />
+              <EmptyState icon={<FolderTree size={18} />} title="No folders created yet" description="The user has not created project folders yet." />
             ) : (
-              <FolderTreeView nodes={folderTree} canDelete={false} onDelete={onDeleteFolder} />
+              <FolderTreeView
+                nodes={folderTree}
+                canDelete={false}
+                activeFolderId={uploadForm.folderId || null}
+                onSelect={onUploadFolderPick}
+                onDelete={onDeleteFolder}
+              />
             )}
           </SectionCard>
         )}
       </div>
 
-      {currentUser.role !== 'admin' && currentUser.role !== 'reviewer' ? (
-        <SectionCard title="Project details" description="Edit your one project proposal and keep the tracking information fresh.">
+      {currentUser.role === 'student' ? (
+        <SectionCard title="Project details" description="Keep the main proposal details current.">
           <ProjectForm
             currentUser={currentUser}
             proposalForm={proposalForm}
@@ -1414,9 +1168,14 @@ function WorkspaceDetailPanel({
       ) : null}
 
       <div className="workspace-grid">
-        {(currentUser.role === 'admin' || currentUser.role === 'student') ? (
-          <SectionCard title="Upload related material" description="Save multiple supporting documents under the project and folder structure.">
+        {currentUser.role === 'student' ? (
+          <SectionCard title="Upload materials" description="Choose a folder and save related project documents into it.">
             <div className="stack-form">
+              {activeUploadFolder ? (
+                <div className="active-target-banner">
+                  Upload target: <strong>{activeUploadFolder.label}</strong>
+                </div>
+              ) : null}
               <label>
                 Folder destination
                 <select
@@ -1436,7 +1195,6 @@ function WorkspaceDetailPanel({
                 <input
                   value={uploadForm.category}
                   onChange={(event) => onUploadFormChange({ ...uploadForm, category: event.target.value })}
-                  placeholder="supporting-document"
                 />
               </label>
               <label>
@@ -1444,7 +1202,6 @@ function WorkspaceDetailPanel({
                 <textarea
                   value={uploadForm.description}
                   onChange={(event) => onUploadFormChange({ ...uploadForm, description: event.target.value })}
-                  placeholder="Optional note for the uploaded files."
                   rows={4}
                 />
               </label>
@@ -1452,28 +1209,41 @@ function WorkspaceDetailPanel({
                 <Upload size={18} />
                 <div>
                   <strong>Choose one or more files</strong>
-                  <span>PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, PNG, JPG, TXT, ZIP</span>
+                  <span>Click a folder in the tree first if you want these files saved into that folder.</span>
                 </div>
                 <input type="file" multiple onChange={onUploadFiles} />
               </label>
             </div>
           </SectionCard>
-        ) : null}
+        ) : (
+          <SectionCard title="Document controls" description="Admin can inspect the workspace and remove uploaded documents when needed.">
+            <div className="readonly-panel">
+              <p>Folders: {workspace.item.folderCount}</p>
+              <p>Documents: {workspace.item.documentCount}</p>
+            </div>
+          </SectionCard>
+        )}
 
-        <SectionCard title="Folder tree" description="Systematic parent and child folders for this project.">
+        <SectionCard title="Folder tree" description="Click a folder to make it the current upload destination.">
           {!folderTree.length ? (
             <EmptyState
               icon={<FolderTree size={18} />}
               title="No folders created yet"
-              description={currentUser.role === 'reviewer' ? 'Students and admins can create folders.' : 'Create a parent folder or a subfolder to organize project material.'}
+              description={currentUser.role === 'student' ? 'Create a parent folder or subfolder to organize your project materials.' : 'The user has not created any folders yet.'}
             />
           ) : (
-            <FolderTreeView nodes={folderTree} canDelete={canDelete} onDelete={onDeleteFolder} />
+            <FolderTreeView
+              nodes={folderTree}
+              canDelete={currentUser.role === 'student'}
+              activeFolderId={uploadForm.folderId || null}
+              onSelect={onUploadFolderPick}
+              onDelete={onDeleteFolder}
+            />
           )}
         </SectionCard>
       </div>
 
-      <SectionCard title="Document library" description="Users can upload documents. Only admin can remove them.">
+      <SectionCard title="Document library" description={currentUser.role === 'admin' ? 'Admin can delete uploaded documents.' : 'Your uploaded documents live here. Only admin can delete them.'}>
         <DocumentTable
           currentUser={currentUser}
           documents={workspace.documents}
@@ -1482,18 +1252,9 @@ function WorkspaceDetailPanel({
         />
       </SectionCard>
 
-      <SectionCard title="Tracking history" description="Every status change is stored in the backend.">
-        <HistoryList items={workspace.history} emptyText="Tracking events will appear here." />
+      <SectionCard title="Tracking history" description="Every status update is saved in the backend.">
+        <HistoryList items={workspace.history} emptyText="Tracking updates will appear here." />
       </SectionCard>
-
-      {canDelete ? (
-        <SectionCard title="Admin actions" description="Only admin can remove uploaded content and project records.">
-          <button className="danger-button" type="button" onClick={onDeleteProposal} disabled={actionLoading}>
-            <Trash2 size={16} />
-            Delete project proposal
-          </button>
-        </SectionCard>
-      ) : null}
     </>
   );
 }
@@ -1517,42 +1278,24 @@ function UsersView({
 }) {
   return (
     <div className="page-grid">
-      <SectionCard title="Add user" description="Admin can add users and optionally create another admin.">
+      <SectionCard title="Add user" description="Admin can add users and create another admin when needed.">
         <form className="stack-form" onSubmit={onCreateUser}>
           <label>
             Full name
-            <input
-              value={newUserForm.name}
-              onChange={(event) => onFormChange({ ...newUserForm, name: event.target.value })}
-              required
-            />
+            <input value={newUserForm.name} onChange={(event) => onFormChange({ ...newUserForm, name: event.target.value })} required />
           </label>
           <label>
             Email
-            <input
-              type="email"
-              value={newUserForm.email}
-              onChange={(event) => onFormChange({ ...newUserForm, email: event.target.value })}
-              required
-            />
+            <input type="email" value={newUserForm.email} onChange={(event) => onFormChange({ ...newUserForm, email: event.target.value })} required />
           </label>
           <label>
             Password
-            <input
-              type="password"
-              value={newUserForm.password}
-              onChange={(event) => onFormChange({ ...newUserForm, password: event.target.value })}
-              required
-            />
+            <input type="password" value={newUserForm.password} onChange={(event) => onFormChange({ ...newUserForm, password: event.target.value })} required />
           </label>
           <label>
             Role
-            <select
-              value={newUserForm.role}
-              onChange={(event) => onFormChange({ ...newUserForm, role: event.target.value as Role })}
-            >
+            <select value={newUserForm.role} onChange={(event) => onFormChange({ ...newUserForm, role: event.target.value as Role })}>
               <option value="student">User</option>
-              <option value="reviewer">Reviewer</option>
               <option value="admin">Admin</option>
             </select>
           </label>
@@ -1563,7 +1306,7 @@ function UsersView({
         </form>
       </SectionCard>
 
-      <SectionCard title="User directory" description="Admin can see every user and remove accounts when needed.">
+      <SectionCard title="User directory" description="Admin can remove users from the system here.">
         {!users.length ? (
           <EmptyState icon={<Users size={18} />} title="No users found" description="Created users will appear here." />
         ) : (
@@ -1608,16 +1351,6 @@ function UsersView({
   );
 }
 
-function ActivityView({ logs }: { logs: ActivityLog[] }) {
-  return (
-    <div className="page-grid">
-      <SectionCard title="Backend activity logs" description="Logs are stored in the backend for important user and proposal actions.">
-        <ActivityList items={logs} />
-      </SectionCard>
-    </div>
-  );
-}
-
 function ProjectForm({
   currentUser,
   proposalForm,
@@ -1637,73 +1370,35 @@ function ProjectForm({
     <form className="project-form" onSubmit={onSubmit}>
       <label>
         Project title
-        <input
-          value={proposalForm.title}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, title: event.target.value })}
-          required
-        />
+        <input value={proposalForm.title} onChange={(event) => onProposalFormChange({ ...proposalForm, title: event.target.value })} required />
       </label>
       <label>
         Domain
-        <input
-          value={proposalForm.domain}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, domain: event.target.value })}
-          placeholder="AI, ERP, Healthcare, Education"
-          required
-        />
+        <input value={proposalForm.domain} onChange={(event) => onProposalFormChange({ ...proposalForm, domain: event.target.value })} required />
       </label>
       <label>
         Scheme
-        <input
-          value={proposalForm.scheme}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, scheme: event.target.value })}
-          placeholder="Scheme or review track"
-        />
+        <input value={proposalForm.scheme} onChange={(event) => onProposalFormChange({ ...proposalForm, scheme: event.target.value })} />
       </label>
       <label>
         Tech stack
-        <input
-          value={proposalForm.techStack}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, techStack: event.target.value })}
-          placeholder="React, Node.js, PostgreSQL"
-        />
+        <input value={proposalForm.techStack} onChange={(event) => onProposalFormChange({ ...proposalForm, techStack: event.target.value })} />
       </label>
       <label className="full-span">
         Abstract
-        <textarea
-          value={proposalForm.abstract}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, abstract: event.target.value })}
-          rows={4}
-          required
-        />
+        <textarea value={proposalForm.abstract} onChange={(event) => onProposalFormChange({ ...proposalForm, abstract: event.target.value })} rows={4} required />
       </label>
       <label className="full-span">
         Problem statement
-        <textarea
-          value={proposalForm.problem}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, problem: event.target.value })}
-          rows={4}
-          required
-        />
+        <textarea value={proposalForm.problem} onChange={(event) => onProposalFormChange({ ...proposalForm, problem: event.target.value })} rows={4} required />
       </label>
       <label className="full-span">
         Objectives
-        <textarea
-          value={proposalForm.objectives}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, objectives: event.target.value })}
-          rows={4}
-          placeholder="One objective per line"
-          required
-        />
+        <textarea value={proposalForm.objectives} onChange={(event) => onProposalFormChange({ ...proposalForm, objectives: event.target.value })} rows={4} placeholder="One objective per line" required />
       </label>
       <label className="full-span">
         Methodology
-        <textarea
-          value={proposalForm.methodology}
-          onChange={(event) => onProposalFormChange({ ...proposalForm, methodology: event.target.value })}
-          rows={4}
-          required
-        />
+        <textarea value={proposalForm.methodology} onChange={(event) => onProposalFormChange({ ...proposalForm, methodology: event.target.value })} rows={4} required />
       </label>
       <label className="full-span">
         Team members
@@ -1734,13 +1429,7 @@ function DocumentTable({
   onDelete: (documentId: string) => Promise<void>;
 }) {
   if (!documents.length) {
-    return (
-      <EmptyState
-        icon={<ArrowDownToLine size={18} />}
-        title="No documents uploaded"
-        description="Upload proposal files, related material, and supporting documents here."
-      />
-    );
+    return <EmptyState icon={<ArrowDownToLine size={18} />} title="No documents uploaded" description="Project files will appear here once uploaded." />;
   }
 
   return (
@@ -1799,7 +1488,7 @@ function HistoryList({
   emptyText: string;
 }) {
   if (!items.length) {
-    return <EmptyState icon={<Activity size={18} />} title="No history yet" description={emptyText} />;
+    return <EmptyState icon={<Workflow size={18} />} title="No history yet" description={emptyText} />;
   }
 
   return (
@@ -1812,38 +1501,9 @@ function HistoryList({
               <strong>{item.toStatus}</strong>
               <span>{formatDateTime(item.createdAt)}</span>
             </div>
-            <p>
-              {item.changedByName || 'System'}
-              {item.fromStatus ? ` moved the project from ${item.fromStatus}.` : ' created the project tracking record.'}
-            </p>
+            <p>{item.fromStatus ? `Moved from ${item.fromStatus}` : 'Project created'} / {item.changedByName || 'System'}</p>
             {item.note ? <small>{item.note}</small> : null}
           </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function ActivityList({ items }: { items: ActivityLog[] }) {
-  if (!items.length) {
-    return <EmptyState icon={<Activity size={18} />} title="No logs found" description="Recent actions will appear here." />;
-  }
-
-  return (
-    <div className="activity-list">
-      {items.map((item) => (
-        <article key={item.id} className="activity-item">
-          <div className="activity-icon">
-            <Activity size={16} />
-          </div>
-          <div>
-            <strong>{humanizeAction(item.action)}</strong>
-            <p>
-              {item.userName || 'System'} · {item.entityType}
-              {item.entityId ? ` · ${item.entityId}` : ''}
-            </p>
-          </div>
-          <span>{formatDateTime(item.createdAt)}</span>
         </article>
       ))}
     </div>
@@ -1853,16 +1513,27 @@ function ActivityList({ items }: { items: ActivityLog[] }) {
 function FolderTreeView({
   nodes,
   canDelete,
+  activeFolderId,
+  onSelect,
   onDelete,
 }: {
   nodes: FolderNode[];
   canDelete: boolean;
+  activeFolderId: string | null;
+  onSelect: (folderId: string) => void;
   onDelete: (folderId: string) => Promise<void>;
 }) {
   return (
     <div className="folder-tree">
       {nodes.map((node) => (
-        <FolderBranch key={node.id} node={node} canDelete={canDelete} onDelete={onDelete} />
+        <FolderBranch
+          key={node.id}
+          node={node}
+          canDelete={canDelete}
+          activeFolderId={activeFolderId}
+          onSelect={onSelect}
+          onDelete={onDelete}
+        />
       ))}
     </div>
   );
@@ -1871,34 +1542,58 @@ function FolderTreeView({
 function FolderBranch({
   node,
   canDelete,
+  activeFolderId,
+  onSelect,
   onDelete,
 }: {
   node: FolderNode;
   canDelete: boolean;
+  activeFolderId: string | null;
+  onSelect: (folderId: string) => void;
   onDelete: (folderId: string) => Promise<void>;
 }) {
   return (
     <div className="folder-branch">
-      <div className="folder-card">
+      <button className={activeFolderId === node.id ? 'folder-card active' : 'folder-card'} type="button" onClick={() => onSelect(node.id)}>
         <div className="folder-card-main">
           <span className="folder-chip" style={{ backgroundColor: node.color }} />
           <div>
             <strong>{node.name}</strong>
-            <span>
-              {node.scheme || 'No scheme'} · {node.documentCount} document{node.documentCount === 1 ? '' : 's'}
-            </span>
+            <span>{node.scheme || 'No scheme'} / {node.documentCount} document{node.documentCount === 1 ? '' : 's'}</span>
           </div>
         </div>
         {canDelete ? (
-          <button className="icon-button danger" type="button" onClick={() => onDelete(node.id)}>
+          <span
+            className="icon-button danger folder-delete-button"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              void onDelete(node.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                void onDelete(node.id);
+              }
+            }}
+          >
             <Trash2 size={14} />
-          </button>
+          </span>
         ) : null}
-      </div>
+      </button>
       {node.children.length ? (
         <div className="folder-children">
           {node.children.map((child) => (
-            <FolderBranch key={child.id} node={child} canDelete={canDelete} onDelete={onDelete} />
+            <FolderBranch
+              key={child.id}
+              node={child}
+              canDelete={canDelete}
+              activeFolderId={activeFolderId}
+              onSelect={onSelect}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       ) : null}
@@ -1992,7 +1687,7 @@ function LoadingScreen() {
         <ProjectLogoMark size={48} />
       </div>
       <h1>Project Proposal Checker</h1>
-      <p>Preparing your tracking workspace.</p>
+      <p>Preparing your workspace.</p>
     </div>
   );
 }
@@ -2015,18 +1710,18 @@ function buildFolderTree(folders: FolderItem[]) {
     roots.push(node);
   });
 
-  const sortNodes = (items: FolderNode[]) => {
-    items.sort((left, right) => left.name.localeCompare(right.name));
-    items.forEach((item) => sortNodes(item.children));
+  const sortBranch = (branch: FolderNode[]) => {
+    branch.sort((left, right) => left.name.localeCompare(right.name));
+    branch.forEach((node) => sortBranch(node.children));
   };
 
-  sortNodes(roots);
+  sortBranch(roots);
   return roots;
 }
 
 function flattenFolderOptions(nodes: FolderNode[], depth = 0) {
   return nodes.flatMap((node) => {
-    const label = `${'  '.repeat(depth)}${depth ? '↳ ' : ''}${node.name}`;
+    const label = `${'  '.repeat(depth)}${depth ? '-> ' : ''}${node.name}`;
     return [{ id: node.id, label }, ...flattenFolderOptions(node.children, depth + 1)];
   });
 }
@@ -2058,15 +1753,9 @@ function formToProposalPayload(form: ProposalFormState, currentUser: AuthUser): 
     scheme: form.scheme.trim(),
     abstract: form.abstract.trim(),
     problem: form.problem.trim(),
-    objectives: form.objectives
-      .split('\n')
-      .map((value) => value.trim())
-      .filter(Boolean),
+    objectives: form.objectives.split('\n').map((value) => value.trim()).filter(Boolean),
     methodology: form.methodology.trim(),
-    techStack: form.techStack
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean),
+    techStack: form.techStack.split(',').map((value) => value.trim()).filter(Boolean),
     team: uniqueMembers.map((name, index) => ({
       name,
       role: index === 0 ? 'Lead' : 'Member',
@@ -2075,24 +1764,13 @@ function formToProposalPayload(form: ProposalFormState, currentUser: AuthUser): 
 }
 
 function roleLabel(role: Role) {
-  if (role === 'admin') return 'Admin';
-  if (role === 'reviewer') return 'Reviewer';
-  return 'User';
+  return role === 'admin' ? 'Admin' : 'User';
 }
 
 function viewTitle(view: View, role: Role) {
-  if (view === 'dashboard') {
-    if (role === 'admin') return 'Admin Dashboard';
-    if (role === 'reviewer') return 'Reviewer Dashboard';
-    return 'My Tracking Board';
-  }
+  if (view === 'dashboard') return role === 'admin' ? 'Admin Overview' : 'My Tracking Board';
   if (view === 'workspace') return 'Project Workspace';
-  if (view === 'users') return 'User Management';
-  return 'Activity Logs';
-}
-
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString();
+  return 'User Management';
 }
 
 function formatDateTime(value: string) {
@@ -2103,14 +1781,6 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function humanizeAction(value: string) {
-  return value
-    .toLowerCase()
-    .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
 }
 
 function statusClassName(status: ProposalStatus) {
