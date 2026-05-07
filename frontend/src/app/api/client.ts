@@ -203,18 +203,10 @@ export async function login(email: string, password: string, role: Role) {
   });
 }
 
-export async function requestOtp(email: string) {
-  return apiFetch<{ message: string }>('/api/auth/request-otp', {
-    method: 'POST',
-    body: JSON.stringify({ email }),
-    auth: false,
-  });
-}
-
-export async function register(name: string, email: string, password: string, role: Role, otp: string) {
+export async function register(name: string, email: string, password: string, role: Role) {
   return apiFetch<{ token: string; user: AuthUser }>('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password, role: role === 'admin' ? 'admin' : 'student', otp }),
+    body: JSON.stringify({ name, email, password, role: role === 'admin' ? 'admin' : 'student' }),
     auth: false,
   });
 }

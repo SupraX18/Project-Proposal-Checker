@@ -34,7 +34,6 @@ import {
   listUsers,
   login,
   register,
-  requestOtp,
   setAuthToken,
   updateProposal,
   updateProposalStatus,
@@ -125,8 +124,6 @@ export default function App() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
 
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [users, setUsers] = useState<UserDirectoryItem[]>([]);
@@ -278,33 +275,17 @@ export default function App() {
     event.preventDefault();
     setActionLoading(true);
     try {
-      if (authMode === 'login') {
-        const authResponse = await login(email, password, authRole);
-        setAuthToken(authResponse.token);
-        setCurrentUser(authResponse.user);
-        setName('');
-        setEmail('');
-        setPassword('');
-        setOtp('');
-        setOtpSent(false);
-        showToast('success', 'Signed in successfully.');
-      } else {
-        if (!otpSent) {
-          await requestOtp(email);
-          setOtpSent(true);
-          showToast('success', 'OTP sent. Please check the backend console.');
-        } else {
-          const authResponse = await register(name, email, password, authRole, otp);
-          setAuthToken(authResponse.token);
-          setCurrentUser(authResponse.user);
-          setName('');
-          setEmail('');
-          setPassword('');
-          setOtp('');
-          setOtpSent(false);
-          showToast('success', 'Account created successfully.');
-        }
-      }
+      const authResponse =
+        authMode === 'login'
+          ? await login(email, password, authRole)
+          : await register(name, email, password, authRole);
+
+      setAuthToken(authResponse.token);
+      setCurrentUser(authResponse.user);
+      setName('');
+      setEmail('');
+      setPassword('');
+      showToast('success', authMode === 'login' ? 'Signed in successfully.' : 'Account created successfully.');
     } catch (error) {
       showToast('error', getErrorMessage(error));
     } finally {
@@ -612,30 +593,23 @@ export default function App() {
                 {authMode === 'register' ? (
                   <label>
                     Full name
-                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" required disabled={otpSent} />
+                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" required />
                   </label>
                 ) : null}
 
                 <label>
                   Email address
-                  <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required disabled={otpSent && authMode === 'register'} />
+                  <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
                 </label>
 
                 <label>
                   Password
-                  <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" required disabled={otpSent && authMode === 'register'} />
+                  <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" required />
                 </label>
-
-                {authMode === 'register' && otpSent ? (
-                  <label>
-                    Enter 6-digit OTP
-                    <input type="text" value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="123456" required maxLength={6} pattern="\d{6}" />
-                  </label>
-                ) : null}
 
                 <button className="primary-button auth-submit-btn" type="submit" disabled={actionLoading}>
                   {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
-                  {authMode === 'login' ? 'Sign in' : authMode === 'register' && !otpSent ? 'Send OTP' : 'Verify & Create account'}
+                  {authMode === 'login' ? 'Sign in' : 'Create account'}
                 </button>
               </form>
 
@@ -648,14 +622,14 @@ export default function App() {
                 <button
                   className={`pill-btn${authMode === 'login' ? ' active' : ''}`}
                   type="button"
-                  onClick={() => { setAuthMode('login'); setOtpSent(false); setOtp(''); }}
+                  onClick={() => setAuthMode('login')}
                 >
                   Sign In
                 </button>
                 <button
                   className={`pill-btn${authMode === 'register' ? ' active' : ''}`}
                   type="button"
-                  onClick={() => { setAuthMode('register'); setOtpSent(false); setOtp(''); }}
+                  onClick={() => setAuthMode('register')}
                 >
                   Register
                 </button>
