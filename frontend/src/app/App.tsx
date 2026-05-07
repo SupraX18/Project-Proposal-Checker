@@ -508,7 +508,6 @@ export default function App() {
                 <div className="auth-hero-brand-copy">
                   <p className="eyebrow">Project Proposal Checker</p>
                   <h1>One platform.<br />Every proposal.</h1>
-                  <p className="auth-hero-sub">Track submissions, manage documents, assign reviewers — all in one workspace.</p>
                 </div>
               </div>
 
@@ -545,7 +544,6 @@ export default function App() {
               <div className="auth-role-panel">
                 <div className="auth-role-copy">
                   <span className="auth-role-label">{authMode === 'login' ? 'Sign in as' : 'Register as'}</span>
-                  <p>Choose whether this account should open the user workspace or the admin workspace.</p>
                 </div>
 
                 {/* Sliding role pill */}
@@ -637,11 +635,7 @@ export default function App() {
                 </button>
               </div>
 
-              <p className="auth-switch-text">
-                {authMode === 'login'
-                  ? <>Need an account? <button type="button" className="auth-link" onClick={() => setAuthMode('register')}>Register as {roleLabel(authRole)}</button></>
-                  : <>Already have an account? <button type="button" className="auth-link" onClick={() => setAuthMode('login')}>Sign in as {roleLabel(authRole)}</button></>}
-              </p>
+
 
             </div>
           </section>

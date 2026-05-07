@@ -15,35 +15,47 @@ export function ProjectLogoMark({
       aria-hidden="true"
       {...rest}
     >
-      {/* Outer hexagon ring */}
-      <polygon
-        points="24,3 42,13.5 42,34.5 24,45 6,34.5 6,13.5"
+      {/* Document body */}
+      <rect
+        x="8" y="5" width="26" height="34"
+        rx="4"
+        fill="currentColor"
+        fillOpacity="0.12"
         stroke="currentColor"
         strokeWidth="1.8"
+      />
+      {/* Folded corner */}
+      <path
+        d="M26 5 L34 13"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M26 5 L26 13 L34 13"
+        fill="currentColor"
+        fillOpacity="0.18"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      {/* Text lines on document */}
+      <line x1="13" y1="21" x2="25" y2="21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" opacity="0.55" />
+      <line x1="13" y1="26" x2="22" y2="26" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" opacity="0.4" />
+      {/* Checkmark badge (bottom-right) */}
+      <circle
+        cx="34" cy="36" r="8"
+        fill="currentColor"
+        fillOpacity="0.9"
+      />
+      <polyline
+        points="30,36 33,39 38,32"
+        stroke="white"
+        strokeWidth="2"
+        strokeLinecap="round"
         strokeLinejoin="round"
         fill="none"
-        opacity="0.35"
       />
-      {/* Inner hexagon */}
-      <polygon
-        points="24,10 36,17 36,31 24,38 12,31 12,17"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-        fill="currentColor"
-        fillOpacity="0.07"
-      />
-      {/* Vertical center line */}
-      <line x1="24" y1="15" x2="24" y2="33" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      {/* Horizontal bars */}
-      <line x1="17" y1="20" x2="31" y2="20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <line x1="19" y1="24" x2="29" y2="24" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <line x1="21" y1="28" x2="27" y2="28" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      {/* Top dot — the "check" node */}
-      <circle cx="24" cy="13" r="2.2" fill="currentColor" />
-      {/* Corner accent dots */}
-      <circle cx="36" cy="17" r="1.4" fill="currentColor" fillOpacity="0.6" />
-      <circle cx="12" cy="31" r="1.4" fill="currentColor" fillOpacity="0.6" />
     </svg>
   );
 }
