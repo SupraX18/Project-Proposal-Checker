@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Search,
+  Shield,
   Trash2,
   Upload,
   UserCog,
@@ -495,33 +496,140 @@ export default function App() {
       <div className="auth-screen">
         {toast ? <ToastView toast={toast} /> : null}
         <div className="auth-shell">
+
+          {/* ── LEFT PANEL ── */}
           <section className="auth-hero">
-            <div className="auth-hero-brand">
-              <div className="auth-hero-mark">
-                <ProjectLogoMark size={54} />
+            <div className="auth-hero-mesh" />
+            <div className="auth-hero-inner">
+              <div className="auth-hero-brand">
+                <div className="auth-hero-mark">
+                  <ProjectLogoMark size={52} />
+                </div>
+                <div className="auth-hero-brand-copy">
+                  <p className="eyebrow">Project Proposal Checker</p>
+                  <h1>One platform.<br />Every proposal.</h1>
+                  <p className="auth-hero-sub">Track submissions, manage documents, assign reviewers — all in one workspace.</p>
+                </div>
               </div>
-              <h1>Project Proposal Checker</h1>
-            </div>
-            <div className="hero-keywords">
-              <span>Proposal Tracking</span>
-              <span>Folder Vault</span>
-              <span>Document Flow</span>
-              <span>Status Updates</span>
+
+              <div className="auth-stat-row">
+                <div className="auth-stat">
+                  <span className="auth-stat-icon"><CheckCircle2 size={16} /></span>
+                  <div>
+                    <strong>Proposal Tracking</strong>
+                    <span>End-to-end status flow</span>
+                  </div>
+                </div>
+                <div className="auth-stat">
+                  <span className="auth-stat-icon"><FolderTree size={16} /></span>
+                  <div>
+                    <strong>Folder Vault</strong>
+                    <span>Nested folders per project</span>
+                  </div>
+                </div>
+                <div className="auth-stat">
+                  <span className="auth-stat-icon"><Shield size={16} /></span>
+                  <div>
+                    <strong>Role-Based Access</strong>
+                    <span>Student · Reviewer · Admin</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 
+          {/* ── RIGHT PANEL ── */}
           <section className="auth-card">
-            <div className="auth-top-switches">
-              <div className="auth-mode-switch">
+            <div className="auth-card-inner">
+
+              <div className="auth-role-panel">
+                <div className="auth-role-copy">
+                  <span className="auth-role-label">{authMode === 'login' ? 'Sign in as' : 'Register as'}</span>
+                  <p>Choose whether this account should open the user workspace or the admin workspace.</p>
+                </div>
+
+                {/* Sliding role pill */}
+                <div className="pill-toggle role-toggle">
+                  <div
+                    className="pill-thumb"
+                    style={{ transform: authRole === 'admin' ? 'translateX(100%)' : 'translateX(0)' }}
+                  />
+                  <button
+                    className={`pill-btn${authRole === 'student' ? ' active' : ''}`}
+                    type="button"
+                    onClick={() => setAuthRole('student')}
+                  >
+                    <Users size={14} /> User
+                  </button>
+                  <button
+                    className={`pill-btn${authRole === 'admin' ? ' active' : ''}`}
+                    type="button"
+                    onClick={() => setAuthRole('admin')}
+                  >
+                    <Shield size={14} /> Admin
+                  </button>
+                </div>
+              </div>
+
+              {/* Header */}
+              <div className="auth-card-header">
+                <div className="auth-card-logo-mark">
+                  <ProjectLogoMark size={28} />
+                </div>
+                <div>
+                  <h2>
+                    {authMode === 'login'
+                      ? `${authRole === 'admin' ? 'Admin' : 'User'} Sign In`
+                      : `Create ${authRole === 'admin' ? 'Admin' : 'User'} Account`}
+                  </h2>
+                  <p>
+                    {authMode === 'login'
+                      ? 'Welcome back — enter your credentials.'
+                      : 'Join the platform and start tracking.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Form */}
+              <form className="auth-form" onSubmit={handleAuthSubmit}>
+                {authMode === 'register' ? (
+                  <label>
+                    Full name
+                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" required />
+                  </label>
+                ) : null}
+
+                <label>
+                  Email address
+                  <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
+                </label>
+
+                <label>
+                  Password
+                  <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" required />
+                </label>
+
+                <button className="primary-button auth-submit-btn" type="submit" disabled={actionLoading}>
+                  {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
+                  {authMode === 'login' ? 'Sign in' : 'Create account'}
+                </button>
+              </form>
+
+              {/* Sliding mode toggle */}
+              <div className="pill-toggle mode-toggle">
+                <div
+                  className="pill-thumb"
+                  style={{ transform: authMode === 'register' ? 'translateX(100%)' : 'translateX(0)' }}
+                />
                 <button
-                  className={authMode === 'login' ? 'switch-button active' : 'switch-button'}
+                  className={`pill-btn${authMode === 'login' ? ' active' : ''}`}
                   type="button"
                   onClick={() => setAuthMode('login')}
                 >
-                  Login
+                  Sign In
                 </button>
                 <button
-                  className={authMode === 'register' ? 'switch-button active' : 'switch-button'}
+                  className={`pill-btn${authMode === 'register' ? ' active' : ''}`}
                   type="button"
                   onClick={() => setAuthMode('register')}
                 >
@@ -529,57 +637,13 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="auth-role-switch">
-                <button
-                  className={authRole === 'student' ? 'switch-button active' : 'switch-button'}
-                  type="button"
-                  onClick={() => setAuthRole('student')}
-                >
-                  User
-                </button>
-                <button
-                  className={authRole === 'admin' ? 'switch-button active' : 'switch-button'}
-                  type="button"
-                  onClick={() => setAuthRole('admin')}
-                >
-                  Admin
-                </button>
-              </div>
+              <p className="auth-switch-text">
+                {authMode === 'login'
+                  ? <>Need an account? <button type="button" className="auth-link" onClick={() => setAuthMode('register')}>Register as {roleLabel(authRole)}</button></>
+                  : <>Already have an account? <button type="button" className="auth-link" onClick={() => setAuthMode('login')}>Sign in as {roleLabel(authRole)}</button></>}
+              </p>
+
             </div>
-
-            <div className="auth-card-header">
-              <div className="auth-card-logo-mark">
-                <ProjectLogoMark size={28} />
-              </div>
-              <div>
-                <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'User'} login` : `${authRole === 'admin' ? 'Admin' : 'User'} register`}</h2>
-                <p>{authMode === 'login' ? 'Open your workspace.' : 'Create your access to the workspace.'}</p>
-              </div>
-            </div>
-
-            <form className="auth-form" onSubmit={handleAuthSubmit}>
-              {authMode === 'register' ? (
-                <label>
-                  Full name
-                  <input value={name} onChange={(event) => setName(event.target.value)} required />
-                </label>
-              ) : null}
-
-              <label>
-                Email address
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-              </label>
-
-              <label>
-                Password
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-              </label>
-
-              <button className="primary-button" type="submit" disabled={actionLoading}>
-                {actionLoading ? <LoaderCircle className="spin" size={18} /> : null}
-                {authMode === 'login' ? 'Sign in' : 'Register'}
-              </button>
-            </form>
           </section>
         </div>
       </div>
