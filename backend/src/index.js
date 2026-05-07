@@ -389,6 +389,7 @@ const registerSchema = z.object({
   email: z.string().trim().email(),
   password: z.string().min(6),
   role: z.enum(['student', 'admin']).default('student'),
+  otp: z.string().trim().length(6),
 });
 
 const createUserSchema = registerSchema.extend({
@@ -436,6 +437,48 @@ const logFilterSchema = z.object({
   limit: z.coerce.number().int().min(1).max(250).optional().default(100),
 });
 
+const requestOtpSchema = z.object({
+  email: z.string().trim().email(),
+});
+
+app.post(
+  '/api/auth/request-otp',
+  asyncRoute(async (req, res) => {
+    const parsed = requestOtpSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    const email = normalizeEmail(parsed.data.email);
+
+    // Check if user already exists
+    const existing = await query('select id from users where email = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Upsert into otps table (expires in 10 minutes)
+    await query(
+      `insert into otps (email, otp, expires_at)
+       values ($1, $2, now() + interval '10 minutes')
+       on conflict (email) do update
+       set otp = excluded.otp, expires_at = excluded.expires_at, created_at = now()`,
+      [email, otp]
+    );
+
+    // Simulate sending email
+    console.log(`\n========================================`);
+    console.log(`[OTP SEND SIMULATION]`);
+    console.log(`OTP for ${email} is: ${otp}`);
+    console.log(`========================================\n`);
+
+    return res.json({ message: 'OTP sent' });
+  }),
+);
+
 app.post(
   '/api/auth/register',
   asyncRoute(async (req, res) => {
@@ -444,7 +487,21 @@ app.post(
       return res.status(400).json({ error: 'Invalid registration payload' });
     }
 
-    const { name, email, password, role } = parsed.data;
+    const { name, email, password, role, otp } = parsed.data;
+    const normalizedEmail = normalizeEmail(email);
+
+    const otpResult = await query('select otp, expires_at from otps where email = $1', [normalizedEmail]);
+    if (otpResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Please request an OTP first' });
+    }
+    const otpRow = otpResult.rows[0];
+    if (otpRow.otp !== otp) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    if (new Date(otpRow.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
+    }
+
     const passwordHash = await bcrypt.hash(password, 10);
 
     try {
@@ -452,8 +509,10 @@ app.post(
         `insert into users (name, email, password_hash, role)
          values ($1, $2, $3, $4)
          returning id, name, email, role, created_at`,
-        [name, normalizeEmail(email), passwordHash, role],
+        [name, normalizedEmail, passwordHash, role],
       );
+
+      await query('delete from otps where email = $1', [normalizedEmail]);
 
       const user = mapUser(result.rows[0]);
       const token = signToken(user);

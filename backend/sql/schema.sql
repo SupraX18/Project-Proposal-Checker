@@ -176,3 +176,10 @@ create trigger folders_set_updated_at
 before update on folders
 for each row
 execute function set_updated_at();
+
+create table if not exists otps (
+  email text primary key,
+  otp text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
