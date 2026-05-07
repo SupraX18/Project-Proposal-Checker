@@ -650,17 +650,14 @@ export default function App() {
     <div className="app-shell">
       {toast ? <ToastView toast={toast} /> : null}
 
-      <button className="mobile-menu-button" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
-        <Menu size={18} />
+      <button className="mobile-menu-button" type="button" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle navigation">
+        {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
       </button>
       <button className={`mobile-overlay ${sidebarOpen ? 'open' : ''}`} type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation" />
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-top">
           <BrandLogo compact />
-          <button className="icon-button sidebar-close" type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">
-            <X size={18} />
-          </button>
         </div>
 
         <div className="profile-card">

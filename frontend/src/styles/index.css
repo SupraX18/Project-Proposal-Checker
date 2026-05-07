@@ -1492,6 +1492,10 @@ strong {
   .main-shell {
     padding: 62px 0 0;
   }
+
+  .sidebar-top {
+    padding-left: 48px;
+  }
 }
 
 @media (max-width: 760px) {
