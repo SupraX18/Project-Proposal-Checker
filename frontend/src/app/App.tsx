@@ -804,86 +804,64 @@ function DashboardView({
   onOpenWorkspace: (proposalId: string) => void;
 }) {
   return (
-    <div className="bento-dashboard">
+    <div className="page-grid">
+      <section className="metric-row">
+        <MetricCard icon={<Workflow size={18} />} label="Total Projects" value={metrics.total} tone="neutral" />
+        <MetricCard icon={<FolderTree size={18} />} label="Folders" value={metrics.folders} tone="neutral" />
+        <MetricCard icon={<ArrowDownToLine size={18} />} label="Documents" value={metrics.documents} tone="neutral" />
+        <MetricCard icon={<CheckCircle2 size={18} />} label="Approved" value={metrics.approved} tone="success" />
+      </section>
+
       {dataLoading ? (
-        <div className="bento-card col-span-12">
-          <div className="bento-card-title">Loading dashboard</div>
+        <SectionCard title="Loading dashboard" description="Refreshing project and workspace data.">
           <div className="empty-state">
             <LoaderCircle className="spin" size={20} />
             <span>Loading current records...</span>
           </div>
-        </div>
+        </SectionCard>
       ) : currentUser.role === 'student' ? (
-        <>
-          {/* Main Hero Card */}
-          <div className="bento-card col-span-8 row-span-2">
-            <div className="bento-card-title"><Workflow size={16} /> My Project Board</div>
-            {!personalProposal ? (
-              <EmptyState
-                icon={<FilePlus2 size={18} />}
-                title="No proposal submitted yet"
-                description="Create one project proposal in the workspace to start using folders and documents."
-              />
-            ) : (
-              <div className="student-bento-hero">
+        <SectionCard title="My project board" description="Your proposal, folder system, and document activity in one view.">
+          {!personalProposal ? (
+            <EmptyState
+              icon={<FilePlus2 size={18} />}
+              title="No proposal submitted yet"
+              description="Create one project proposal in the workspace to start using folders and documents."
+            />
+          ) : (
+            <div className="student-highlight">
+              <div className="student-highlight-copy">
                 <StatusPill status={personalProposal.status} />
                 <h3>{personalProposal.title}</h3>
-                <p style={{ color: 'var(--muted)', marginBottom: '16px', maxWidth: '600px' }}>{personalProposal.abstract}</p>
-                <div className="inline-meta" style={{ marginBottom: '24px' }}>
+                <p>{personalProposal.abstract}</p>
+                <div className="inline-meta">
                   <span>{personalProposal.domain}</span>
                   <span>{personalProposal.scheme || 'General scheme'}</span>
+                  <span>{personalProposal.folderCount} folders</span>
+                  <span>{personalProposal.documentCount} documents</span>
                 </div>
-                <button className="primary-button" type="button" onClick={() => onOpenWorkspace(personalProposal.id)}>
-                  Open workspace
-                </button>
               </div>
-            )}
-          </div>
-
-          {/* Metric Cards */}
-          <div className="bento-card col-span-4">
-            <div className="bento-card-title"><FolderTree size={16} /> Folders</div>
-            <div className="bento-metric-value">{metrics.folders}</div>
-            <div className="bento-metric-sub">Total directories</div>
-          </div>
-          
-          <div className="bento-card col-span-4">
-            <div className="bento-card-title"><ArrowDownToLine size={16} /> Documents</div>
-            <div className="bento-metric-value">{metrics.documents}</div>
-            <div className="bento-metric-sub">Uploaded files</div>
-          </div>
-        </>
+              <button className="primary-button" type="button" onClick={() => onOpenWorkspace(personalProposal.id)}>
+                Open workspace
+              </button>
+            </div>
+          )}
+        </SectionCard>
       ) : (
         <>
-          {/* Admin Metrics Row */}
-          <div className="bento-card col-span-3">
-            <div className="bento-card-title"><Users size={16} /> Users</div>
-            <div className="bento-metric-value">{users.length}</div>
-            <div className="bento-metric-sub">Registered accounts</div>
-          </div>
-          <div className="bento-card col-span-3">
-            <div className="bento-card-title"><Workflow size={16} /> Under Review</div>
-            <div className="bento-metric-value" style={{ color: 'var(--violet)' }}>{metrics.underReview}</div>
-            <div className="bento-metric-sub">Needs attention</div>
-          </div>
-          <div className="bento-card col-span-3">
-            <div className="bento-card-title"><LoaderCircle size={16} /> Total Projects</div>
-            <div className="bento-metric-value" style={{ color: 'var(--text)' }}>{metrics.total}</div>
-            <div className="bento-metric-sub">In the system</div>
-          </div>
-          <div className="bento-card col-span-3">
-            <div className="bento-card-title"><CheckCircle2 size={16} /> Approved</div>
-            <div className="bento-metric-value" style={{ color: 'var(--success)' }}>{metrics.approved}</div>
-            <div className="bento-metric-sub">Finalized projects</div>
-          </div>
+          <SectionCard title="Admin overview" description="Admin can manage users and remove uploaded documents when necessary.">
+            <div className="admin-overview-grid">
+              <MetaItem label="Users" value={String(users.length)} />
+              <MetaItem label="Under review" value={String(metrics.underReview)} />
+              <MetaItem label="Rejected" value={String(metrics.rejected)} />
+              <MetaItem label="Approved" value={String(metrics.approved)} />
+            </div>
+          </SectionCard>
 
-          {/* Project Access */}
-          <div className="bento-card col-span-12 row-span-2">
-            <div className="bento-card-title"><FolderPlus size={16} /> Project Access</div>
+          <SectionCard title="Project access" description="Open a project workspace to inspect folders and delete documents if needed.">
             {!proposals.length ? (
               <EmptyState icon={<Users size={18} />} title="No projects yet" description="User projects will appear here." />
             ) : (
-              <div className="bento-list proposal-selector-grid">
+              <div className="proposal-selector-grid">
                 {proposals.map((proposal) => (
                   <button key={proposal.id} className="proposal-selector" type="button" onClick={() => onOpenWorkspace(proposal.id)}>
                     <strong>{proposal.title}</strong>
@@ -893,7 +871,7 @@ function DashboardView({
                 ))}
               </div>
             )}
-          </div>
+          </SectionCard>
         </>
       )}
     </div>
