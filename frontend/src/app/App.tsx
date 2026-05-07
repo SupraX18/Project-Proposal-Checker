@@ -488,7 +488,7 @@ export default function App() {
   }
 
   if (authLoading) {
-    return <LoadingScreen />;
+    return null;
   }
 
   if (!currentUser) {
@@ -1743,17 +1743,6 @@ function ToastView({ toast }: { toast: NonNullable<Toast> }) {
   return <div className={toast.kind === 'success' ? 'toast success' : 'toast error'}>{toast.text}</div>;
 }
 
-function LoadingScreen() {
-  return (
-    <div className="loading-screen">
-      <div className="loading-mark">
-        <ProjectLogoMark size={48} />
-      </div>
-      <h1>Project Proposal Checker</h1>
-      <p>Preparing your workspace.</p>
-    </div>
-  );
-}
 
 function buildFolderTree(folders: FolderItem[]) {
   const nodes = new Map<string, FolderNode>();

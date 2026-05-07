@@ -1526,7 +1526,8 @@ strong {
     border-radius: 26px;
   }
 
-  .board-grid {
+  .board-grid,
+  .admin-overview-grid {
     grid-template-columns: 1fr;
   }
 
