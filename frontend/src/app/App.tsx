@@ -635,7 +635,9 @@ export default function App() {
                 </button>
               </div>
 
-
+              <div style={{ textAlign: 'center', marginTop: '32px', color: 'var(--muted)', fontSize: '0.8rem', fontWeight: 600 }}>
+                Version 2.0 Developed By Supratim
+              </div>
 
             </div>
           </section>
@@ -686,11 +688,14 @@ export default function App() {
           ) : null}
         </nav>
 
-        <div className="sidebar-footer">
-          <button className="secondary-button" type="button" onClick={handleLogout}>
+        <div className="sidebar-footer" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <button className="secondary-button" style={{ width: '100%' }} type="button" onClick={handleLogout}>
             <LogOut size={16} />
             Sign out
           </button>
+          <div style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '0.75rem', fontWeight: 600 }}>
+            Version 2.0 Developed By Supratim
+          </div>
         </div>
       </aside>
 
