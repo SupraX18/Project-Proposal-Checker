@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { query } from './db.js';
 import { requireAuth, requireRole } from './auth.js';
+import nodemailer from 'nodemailer';
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +19,18 @@ const __dirname = path.dirname(__filename);
 const isDirectRun = process.argv[1] ? path.resolve(process.argv[1]) === __filename : false;
 
 dotenv.config({ path: path.resolve(__dirname, '..', 'config', '.env') });
+
+const mailTransporter = process.env.SMTP_HOST
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: Number(process.env.SMTP_PORT) === 465,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    })
+  : null;
 
 const uploadsDir = path.resolve(__dirname, '..', 'uploads');
 const schemaFile = path.resolve(__dirname, '..', 'sql', 'schema.sql');
@@ -469,11 +482,27 @@ app.post(
       [email, otp]
     );
 
-    // Simulate sending email
-    console.log(`\n========================================`);
-    console.log(`[OTP SEND SIMULATION]`);
-    console.log(`OTP for ${email} is: ${otp}`);
-    console.log(`========================================\n`);
+    if (mailTransporter) {
+      try {
+        await mailTransporter.sendMail({
+          from: process.env.SMTP_FROM || '"Project Proposal Checker" <noreply@example.com>',
+          to: email,
+          subject: 'Your Registration OTP Code',
+          text: `Your OTP code for registration is: ${otp}\n\nThis code will expire in 10 minutes.`,
+          html: `<p>Your OTP code for registration is: <strong>${otp}</strong></p><p>This code will expire in 10 minutes.</p>`,
+        });
+        console.log(`[OTP SENT] Email sent to ${email}`);
+      } catch (error) {
+        console.error(`[OTP EMAIL ERROR] Failed to send email to ${email}:`, error);
+        return res.status(500).json({ error: 'Failed to send OTP email. Please check server configuration.' });
+      }
+    } else {
+      // Simulate sending email if SMTP is not configured
+      console.log(`\n========================================`);
+      console.log(`[OTP SEND SIMULATION (SMTP Not Configured)]`);
+      console.log(`OTP for ${email} is: ${otp}`);
+      console.log(`========================================\n`);
+    }
 
     return res.json({ message: 'OTP sent' });
   }),
